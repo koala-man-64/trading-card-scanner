@@ -1,0 +1,17 @@
+{
+  // This file contains global configuration options for the Azure Functions
+  // runtime.  See https://learn.microsoft.com/azure/azure-functions/functions-host-json
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        // Limit the number of telemetry items per second to reduce noise
+        "maxTelemetryItemsPerSecond": 5
+      }
+    }
+  },
+  // Extend the default timeout to give the function time to download and
+  // process batches of images.  The value is in hh:mm:ss format.
+  "functionTimeout": "00:10:00"
+}
