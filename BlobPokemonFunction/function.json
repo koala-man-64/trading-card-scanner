@@ -1,0 +1,17 @@
+{
+  "scriptFile": "__init__.py",
+  "bindings": [
+    {
+      "name": "input_blob",
+      "type": "blobTrigger",
+      "direction": "in",
+      // Path to monitor for new blobs.  The container name should
+      // match your storage container.  The {name} token exposes the
+      // file name to the function.
+      "path": "trading-card-scanner/input/{name}",
+      // Use AzureWebJobsStorage by default, but you can set this to
+      // another application setting containing your connection string.
+      "connection": "AZURE_STORAGE_CONNECTION_STRING"
+    }
+  ]
+}
