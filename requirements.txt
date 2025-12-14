@@ -1,22 +1,6 @@
-# Required Python modules for this project.
-#
-# azure-functions provides the Azure Functions runtime bindings.
 azure-functions
-
-# azure-storage-blob is used to interact with Azure Blob Storage.  See
-# https://pypi.org/project/azure-storage-blob/
 azure-storage-blob
-
-# Pillow provides image handling so that we can validate downloaded images
-# before uploading them to their final destination.  See
-# https://pillow.readthedocs.io/
+opencv-python
+numpy
+pytesseract
 Pillow
-
-# rapidfuzz is used for fuzzy string matching when a Pokémon name is not
-# explicitly contained within the file name.  See
-# https://github.com/maxbachmann/RapidFuzz
-rapidfuzz
-
-# Unidecode helps normalise unicode names for matching.  See
-# https://pypi.org/project/Unidecode/
-Unidecode
