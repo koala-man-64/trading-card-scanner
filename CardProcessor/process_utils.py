@@ -26,6 +26,7 @@ def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: 
     Returns:
         A filtered list of bounding boxes.
     """
+    print(f"non_max_suppression called with {len(boxes)} boxes and overlap_thresh={overlap_thresh}")
     if not boxes:
         return []
 
@@ -75,6 +76,7 @@ def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     Returns:
         A list of bounding boxes in (x, y, w, h) format.
     """
+    print(f"detect_cards called with image of shape {image.shape}")
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # Slight blur to smooth noise
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -132,6 +134,7 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
     Returns:
         A list of bounding boxes; either the original box or smaller splits.
     """
+    print(f"_split_if_needed called with box={box} at depth={depth}")
     MAX_DEPTH = 2
     if depth >= MAX_DEPTH:
         return [box]
@@ -148,6 +151,7 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
 
     # Helper to perform vertical split
     def vertical_splits() -> List[int]:
+        print(f"vertical_splits evaluating box width {w}")
         col_sum = np.sum(edges, axis=0)
         # Normalize and invert so that spaces (between cards) have high values
         # Add a small epsilon to avoid division by zero
@@ -179,6 +183,7 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
         return centers
 
     def horizontal_splits() -> List[int]:
+        print(f"horizontal_splits evaluating box height {h}")
         row_sum = np.sum(edges, axis=1)
         max_val = np.max(row_sum) + 1e-6
         inv = 1.0 - (row_sum / max_val)
@@ -247,6 +252,7 @@ def extract_card_name(crop: np.ndarray) -> str:
     Returns:
         The detected card name or "unknown" if extraction fails.
     """
+    print("extract_card_name called")
     if pytesseract is None:
         return "unknown"
     # Convert to RGB for Pillow
@@ -283,6 +289,7 @@ def process_image(data: bytes) -> List[Tuple[str, bytes]]:
         A list of tuples, each containing the detected card name and the JPEG bytes of the
         cropped card.
     """
+    print(f"process_image called with data length {len(data)} bytes")
     # Decode image from bytes
     file_bytes = np.asarray(bytearray(data), dtype=np.uint8)
     image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
