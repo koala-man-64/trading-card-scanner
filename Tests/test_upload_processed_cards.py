@@ -31,22 +31,20 @@ class _FailingFirstUpload:
 
 
 def _get_connection_string() -> str:
-    connection = os.environ.get("AzureWebJobsStorage")
-    if connection:
-        return connection
-
     settings_path = Path(__file__).resolve().parents[1] / "local.settings.json"
-    if settings_path.exists():
-        try:
-            settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        except Exception:
-            return ""
+    if not settings_path.exists():
+        return ""
 
-        values = settings.get("Values", {})
-        value = values.get("AzureWebJobsStorage")
-        return value or ""
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
 
-    return ""
+    values = settings.get("Values", {})
+    value = values.get("AzureWebJobsStorage") or ""
+    if "usedevelopmentstorage=true" in value.lower():
+        return ""
+    return value
 
 
 def test_upload_processed_cards_builds_names_and_uploads():
@@ -79,7 +77,7 @@ def test_upload_processed_cards_logs_and_continues_on_error(caplog):
 def test_upload_processed_cards_writes_blobs_to_storage():
     connection = _get_connection_string()
     if not connection:
-        pytest.skip("AzureWebJobsStorage connection string not configured")
+        pytest.skip("No real AzureWebJobsStorage connection string found in local.settings.json")
 
     service_client = BlobServiceClient.from_connection_string(connection)
     container_name = f"processed-tests-{uuid4().hex[:8]}"
