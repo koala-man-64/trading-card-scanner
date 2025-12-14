@@ -30,18 +30,30 @@ class _FailingFirstUpload:
         self.uploads.append((name, data, overwrite))
 
 
-def _get_connection_string() -> str:
+def _load_local_settings_into_env() -> None:
     settings_path = Path(__file__).resolve().parents[1] / "local.settings.json"
     if not settings_path.exists():
-        return ""
+        return
 
     try:
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        settings = json.loads(settings_path.read_text(encoding="utf-8-sig"))
     except Exception:
-        return ""
+        return
 
     values = settings.get("Values", {})
-    value = values.get("AzureWebJobsStorage") or ""
+    for key, value in values.items():
+        if not isinstance(value, str):
+            continue
+        if key in {"AzureWebJobsStorage", "STORAGE_ACCOUNT_NAME"}:
+            os.environ[key] = value
+            continue
+        if key not in os.environ:
+            os.environ[key] = value
+
+
+def _get_connection_string() -> str:
+    _load_local_settings_into_env()
+    value = os.environ.get("AzureWebJobsStorage") or ""
     if "usedevelopmentstorage=true" in value.lower():
         return ""
     return value
