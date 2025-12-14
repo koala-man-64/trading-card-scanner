@@ -21,7 +21,7 @@ DEVSTORE_CONNECTION = (
 def _load_settings() -> dict:
     if not LOCAL_SETTINGS.exists():
         pytest.skip("local.settings.json is missing; provide Azure settings to run these tests.")
-    data = json.loads(LOCAL_SETTINGS.read_text(encoding="utf-8"))
+    data = json.loads(LOCAL_SETTINGS.read_text(encoding="utf-8-sig"))
     return data.get("Values", {})
 
 
@@ -35,26 +35,26 @@ def _normalize_connection_string(connection: str) -> str:
 
 
 def _get_storage_connection(monkeypatch: pytest.MonkeyPatch) -> str:
-    """Resolve AzureWebJobsStorage from env first, then local.settings.json."""
-    env_connection = os.environ.get("AzureWebJobsStorage")
+    """Resolve AZURE_STORAGE_CONNECTION_STRING from env first, then local.settings.json."""
+    env_connection = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
     if env_connection:
         connection = _normalize_connection_string(env_connection)
-        monkeypatch.setenv("AzureWebJobsStorage", connection)
+        monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", connection)
         return connection
 
     values = _load_settings()
-    connection = values.get("AzureWebJobsStorage")
+    connection = values.get("AZURE_STORAGE_CONNECTION_STRING")
     if not connection:
-        pytest.skip("AzureWebJobsStorage not configured in environment or local.settings.json")
+        pytest.skip("AZURE_STORAGE_CONNECTION_STRING not configured in environment or local.settings.json")
 
     normalized = _normalize_connection_string(connection)
-    monkeypatch.setenv("AzureWebJobsStorage", normalized)
+    monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", normalized)
     return normalized
 
 
 def test_local_settings_sets_azure_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = _get_storage_connection(monkeypatch)
-    assert os.environ.get("AzureWebJobsStorage") == connection
+    assert os.environ.get("AZURE_STORAGE_CONNECTION_STRING") == connection
 
 
 def test_blob_service_client_initializes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -2,12 +2,35 @@ import json
 import logging
 import os
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 from azure.storage.blob import BlobServiceClient
 
 from function_app import _upload_processed_cards
+
+
+SAMPLES = Path(__file__).parent / "Samples"
+
+
+def _read_sample(name: str) -> bytes:
+    path = SAMPLES / name
+    if not path.exists():
+        pytest.skip(f"Sample file missing: {path}")
+    return path.read_bytes()
+
+
+def _truthy_env(name: str) -> bool:
+    value = (os.environ.get(name) or "").strip().lower()
+    return value in {"1", "true", "yes", "y", "on"}
+
+
+def _output_container_name() -> str:
+    return (os.environ.get("TEST_OUTPUT_CONTAINER") or "processed-tests-output").strip()
+
+
+def _should_delete_output_container() -> bool:
+    # Default is off so the container is kept for inspection.
+    return _truthy_env("DELETE_TEST_OUTPUT_CONTAINER")
 
 
 class _StubContainer:
@@ -61,7 +84,11 @@ def _get_connection_string() -> str:
 
 def test_upload_processed_cards_builds_names_and_uploads():
     container = _StubContainer()
-    cards = [("Charizard V", b"img1"), ("Unknown Hero", b"img2"), ("unknown", b"img3")]
+    cards = [
+        ("Charizard V", _read_sample("sample output 1.jpg")),
+        ("Unknown Hero", _read_sample("sample output 2.jpg")),
+        ("unknown", _read_sample("sample output 3.jpg")),
+    ]
 
     _upload_processed_cards(container, "folder/My Source.JPG", cards)
 
@@ -71,18 +98,20 @@ def test_upload_processed_cards_builds_names_and_uploads():
         "My Source_3_unknown.jpg",
     ]
     assert all(overwrite for *_, overwrite in container.uploads)
-    assert [data for _, data, _ in container.uploads] == [b"img1", b"img2", b"img3"]
+    assert [data for _, data, _ in container.uploads] == [cards[0][1], cards[1][1], cards[2][1]]
 
 
 def test_upload_processed_cards_logs_and_continues_on_error(caplog):
     container = _FailingFirstUpload()
-    cards = [("Card One", b"one"), ("Card Two", b"two")]
+    first_bytes = _read_sample("sample output 1.jpg")
+    second_bytes = _read_sample("sample output 2.jpg")
+    cards = [("Card One", first_bytes), ("Card Two", second_bytes)]
 
     with caplog.at_level(logging.ERROR):
         _upload_processed_cards(container, "input.jpg", cards)
 
     assert "Failed to upload processed card Card One" in caplog.text
-    assert container.uploads == [("input_2_card_two.jpg", b"two", True)]
+    assert container.uploads == [("input_2_card_two.jpg", second_bytes, True)]
 
 
 @pytest.mark.integration
@@ -92,27 +121,27 @@ def test_upload_processed_cards_writes_blobs_to_storage():
         pytest.skip("No real AzureWebJobsStorage connection string found in local.settings.json")
 
     service_client = BlobServiceClient.from_connection_string(connection)
-    container_name = f"processed-tests-{uuid4().hex[:8]}"
+    container_name = _output_container_name()
     container_client = service_client.get_container_client(container_name)
 
-    container_created = False
     try:
         try:
             container_client.create_container()
-            container_created = True
         except Exception as exc:
-            pytest.skip(f"Could not create container for integration test: {exc}")
+            # If it already exists, keep going; otherwise skip.
+            if "ContainerAlreadyExists" not in str(exc):
+                pytest.skip(f"Could not create/get container for integration test: {exc}")
 
-        cards = [("Cloud Card", b"cloud-bytes"), ("unknown", b"mystery")]
+        cards = [("Cloud Card", _read_sample("sample output 1.jpg")), ("unknown", _read_sample("sample output 2.jpg"))]
         _upload_processed_cards(container_client, "cloud/input.jpg", cards)
 
         blobs = {blob.name for blob in container_client.list_blobs()}
         assert {"input_1_cloud_card.jpg", "input_2_unknown.jpg"} <= blobs
 
         downloaded = container_client.download_blob("input_1_cloud_card.jpg").readall()
-        assert downloaded == b"cloud-bytes"
+        assert downloaded == cards[0][1]
     finally:
-        if container_created:
+        if _should_delete_output_container():
             try:
                 container_client.delete_container()
             except Exception:
