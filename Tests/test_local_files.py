@@ -8,6 +8,7 @@ from CardProcessor import process_utils
 
 
 SAMPLES = Path(__file__).parent / "Samples"
+INPUT_IMAGES = sorted(p.name for p in SAMPLES.glob("*input*.jpg"))
 
 
 def _read_sample(name: str) -> bytes:
@@ -17,8 +18,9 @@ def _read_sample(name: str) -> bytes:
     return path.read_bytes()
 
 
-def test_process_image_returns_crops_and_valid_bytes():
-    data = _read_sample("sample input 1.jpg")
+@pytest.mark.parametrize("sample_name", INPUT_IMAGES or ["sample input 1.jpg"])
+def test_process_image_returns_crops_and_valid_bytes(sample_name: str):
+    data = _read_sample(sample_name)
     crops = process_utils.process_image(data)
 
     assert crops, "Expected at least one cropped card"
@@ -31,8 +33,9 @@ def test_process_image_returns_crops_and_valid_bytes():
     assert decoded is not None and decoded.size > 0
 
 
-def test_detect_cards_finds_boxes_in_sample_image():
-    data = _read_sample("sample input 1.jpg")
+@pytest.mark.parametrize("sample_name", INPUT_IMAGES or ["sample input 1.jpg"])
+def test_detect_cards_finds_boxes_in_sample_image(sample_name: str):
+    data = _read_sample(sample_name)
     img = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
 
     boxes = process_utils.detect_cards(img)

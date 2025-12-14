@@ -67,7 +67,7 @@ def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """Detect potential trading card slabs in an image.
 
     The heuristic relies on edge detection and contour analysis to locate
-    rectangular regions that correspond to individual cards. A non‑maximum
+    rectangular regions that correspond to individual cards. A non-maximum
     suppression step is applied to remove overlapping detections.
 
     Args:
@@ -87,6 +87,7 @@ def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     dilated = cv2.dilate(edged, kernel, iterations=1)
     # Find contours
     cnts, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    print(f"detect_cards found {len(cnts)} contours before filtering")
     height, width = image.shape[:2]
     min_area = (height * width) * 0.01  # ignore very small contours (<1% of image)
     max_area = (height * width) * 0.9   # ignore extremely large area (likely the entire image)
@@ -101,7 +102,9 @@ def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
         if 0.3 < aspect < 3.5:
             candidates.append((x, y, w, h))
 
-    # Apply non‑maximum suppression to reduce duplicates
+    print(f"detect_cards retained {len(candidates)} candidate boxes after area/aspect filtering")
+
+    # Apply non-maximum suppression to reduce duplicates
     boxes = non_max_suppression(candidates, overlap_thresh=0.5)
 
     # Additional splitting for boxes that likely contain multiple cards
@@ -109,8 +112,9 @@ def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     for box in boxes:
         split_boxes.extend(_split_if_needed(image, box, depth=0))
 
-    # Apply non‑maximum suppression again to remove overlaps after splitting
+    # Apply non-maximum suppression again to remove overlaps after splitting
     final_boxes = non_max_suppression(split_boxes, overlap_thresh=0.3)
+    print(f"detect_cards returning {len(final_boxes)} final boxes after suppression and splitting")
     # Sort by y then x for consistent ordering
     final_boxes.sort(key=lambda b: (b[1], b[0]))
     return final_boxes
