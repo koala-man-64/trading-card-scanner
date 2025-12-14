@@ -2,12 +2,23 @@ name: CI
 
 on:
   push:
-    branches: ['**']
   pull_request:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
+    env:
+      AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFeqCnf2P0z8a2hYj1bQq2Xv7uVqVvJqj3O2Kj5XKk1pYd4g==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,6 +27,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Install Tesseract OCR
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+          which tesseract
+          tesseract --version
 
       - name: Install dependencies
         run: |
