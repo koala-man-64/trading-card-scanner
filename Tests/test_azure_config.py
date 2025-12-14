@@ -8,6 +8,14 @@ from azure.storage.blob import BlobServiceClient
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_SETTINGS = ROOT / "local.settings.json"
+DEVSTORE_CONNECTION = (
+    "DefaultEndpointsProtocol=http;"
+    "AccountName=devstoreaccount1;"
+    "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
+    "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+    "QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;"
+    "TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+)
 
 
 def _load_settings() -> dict:
@@ -17,44 +25,46 @@ def _load_settings() -> dict:
     return data.get("Values", {})
 
 
-def _apply_settings_to_env(values: dict) -> None:
-    for key, value in values.items():
-        if isinstance(value, str):
-            os.environ[key] = value
+def _normalize_connection_string(connection: str) -> str:
+    """Expand shorthand dev storage connection strings for Azurite."""
+    if not connection:
+        return connection
+    if "usedevelopmentstorage=true" in connection.lower():
+        return DEVSTORE_CONNECTION
+    return connection
 
 
-def test_local_settings_sets_azure_storage(monkeypatch: pytest.MonkeyPatch) -> None:
-    values = _load_settings()
-    if "AzureWebJobsStorage" not in values:
-        pytest.skip("AzureWebJobsStorage not configured in local.settings.json")
+def _get_storage_connection(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Resolve AzureWebJobsStorage from env first, then local.settings.json."""
+    env_connection = os.environ.get("AzureWebJobsStorage")
+    if env_connection:
+        connection = _normalize_connection_string(env_connection)
+        monkeypatch.setenv("AzureWebJobsStorage", connection)
+        return connection
 
-    monkeypatch.delenv("AzureWebJobsStorage", raising=False)
-    _apply_settings_to_env(values)
-
-    assert os.environ.get("AzureWebJobsStorage") == values["AzureWebJobsStorage"]
-
-
-def test_blob_service_client_initializes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     values = _load_settings()
     connection = values.get("AzureWebJobsStorage")
     if not connection:
-        pytest.skip("AzureWebJobsStorage not configured in local.settings.json")
+        pytest.skip("AzureWebJobsStorage not configured in environment or local.settings.json")
 
-    monkeypatch.delenv("AzureWebJobsStorage", raising=False)
-    os.environ["AzureWebJobsStorage"] = connection
+    normalized = _normalize_connection_string(connection)
+    monkeypatch.setenv("AzureWebJobsStorage", normalized)
+    return normalized
 
+
+def test_local_settings_sets_azure_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _get_storage_connection(monkeypatch)
+    assert os.environ.get("AzureWebJobsStorage") == connection
+
+
+def test_blob_service_client_initializes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _get_storage_connection(monkeypatch)
     client = BlobServiceClient.from_connection_string(connection)
     assert client.account_name
 
 
 def test_storage_connection_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    values = _load_settings()
-    connection = values.get("AzureWebJobsStorage")
-    if not connection:
-        pytest.skip("AzureWebJobsStorage not configured in local.settings.json")
-
-    monkeypatch.delenv("AzureWebJobsStorage", raising=False)
-    os.environ["AzureWebJobsStorage"] = connection
+    connection = _get_storage_connection(monkeypatch)
     client = BlobServiceClient.from_connection_string(connection)
 
     try:
