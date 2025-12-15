@@ -19,8 +19,8 @@ jobs:
           - 10002:10002
 
     env:
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
-      AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURITE_CONNECTION_STRING }}
+      AzureWebJobsStorage: ${{ secrets.AZURITE_CONNECTION_STRING }}
       DELETE_TEST_OUTPUT_CONTAINER: "1"
       TEST_OUTPUT_CONTAINER: processed-tests-ci
       TEST_CARD_FOLDER: ci-${{ github.run_id }}

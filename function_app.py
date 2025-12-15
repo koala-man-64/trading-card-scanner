@@ -83,14 +83,15 @@ def process_blob(inputBlob: func.InputStream) -> None:
     """Blob trigger to process trading card images uploaded to the input container."""
     logging.info("Processing blob: %s", inputBlob.name)
 
+    _, processed_container = _get_storage_clients()
+    if not processed_container:
+        logging.critical("Exiting: Processed container client could not be initialized. Check storage connection string.")
+        return
+
     try:
         blob_bytes = inputBlob.read()
     except Exception as exc:
         logging.error("Failed to read blob %s: %s", inputBlob.name, exc)
-        return
-
-    _, processed_container = _get_storage_clients()
-    if not processed_container:
         return
 
     _process_blob_bytes(inputBlob.name, blob_bytes, processed_container)

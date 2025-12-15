@@ -8,14 +8,13 @@ from azure.storage.blob import BlobServiceClient
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_SETTINGS = ROOT / "local.settings.json"
-DEVSTORE_CONNECTION = (
-    "DefaultEndpointsProtocol=http;"
-    "AccountName=devstoreaccount1;"
-    "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
-    "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
-    "QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;"
-    "TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
-)
+
+def _get_devstore_connection_string() -> str:
+    """Return the dev store connection string from env or skip."""
+    connection = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+    if not connection or "devstoreaccount1" not in connection:
+        pytest.skip("AZURE_STORAGE_CONNECTION_STRING for dev store not configured.")
+    return connection
 
 
 def _load_settings() -> dict:
@@ -30,7 +29,7 @@ def _normalize_connection_string(connection: str) -> str:
     if not connection:
         return connection
     if "usedevelopmentstorage=true" in connection.lower():
-        return DEVSTORE_CONNECTION
+        return _get_devstore_connection_string()
     return connection
 
 

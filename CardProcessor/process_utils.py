@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import uuid
 from typing import List, Tuple
@@ -8,6 +9,20 @@ import numpy as np
 from PIL import Image
 
 
+logger = logging.getLogger(__name__)
+
+# Heuristic-based filtering parameters
+MIN_CONTOUR_AREA_RATIO = 0.01
+MAX_CONTOUR_AREA_RATIO = 0.9
+MIN_ASPECT_RATIO = 0.3
+MAX_ASPECT_RATIO = 3.5
+INITIAL_NMS_OVERLAP_THRESHOLD = 0.5
+FINAL_NMS_OVERLAP_THRESHOLD = 0.3
+SPLIT_ASPECT_RATIO_THRESHOLD = 1.2
+MAX_SPLIT_RECURSION_DEPTH = 2
+SMOOTHING_KERNEL_SIZE = 11
+MIN_SPLIT_WIDTH_RATIO = 0.05
+MIN_SPLIT_HEIGHT_RATIO = 0.05
 
 
 def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: float = 0.3) -> List[Tuple[int, int, int, int]]:
@@ -23,7 +38,7 @@ def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: 
     Returns:
         A filtered list of bounding boxes.
     """
-    print(f"non_max_suppression called with {len(boxes)} boxes and overlap_thresh={overlap_thresh}")
+    logger.debug(f"non_max_suppression called with {len(boxes)} boxes and overlap_thresh={overlap_thresh}")
     if not boxes:
         return []
 
@@ -73,7 +88,7 @@ def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     Returns:
         A list of bounding boxes in (x, y, w, h) format.
     """
-    print(f"detect_cards called with image of shape {image.shape}")
+    logger.debug(f"detect_cards called with image of shape {image.shape}")
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # Slight blur to smooth noise
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -84,10 +99,10 @@ def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     dilated = cv2.dilate(edged, kernel, iterations=1)
     # Find contours
     cnts, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    print(f"detect_cards found {len(cnts)} contours before filtering")
+    logger.debug(f"detect_cards found {len(cnts)} contours before filtering")
     height, width = image.shape[:2]
-    min_area = (height * width) * 0.01  # ignore very small contours (<1% of image)
-    max_area = (height * width) * 0.9   # ignore extremely large area (likely the entire image)
+    min_area = (height * width) * MIN_CONTOUR_AREA_RATIO
+    max_area = (height * width) * MAX_CONTOUR_AREA_RATIO
     candidates: List[Tuple[int, int, int, int]] = []
     for cnt in cnts:
         area = cv2.contourArea(cnt)
@@ -96,13 +111,13 @@ def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
         x, y, w, h = cv2.boundingRect(cnt)
         # aspect ratio filter: cards are roughly rectangular but not extremely elongated
         aspect = w / float(h)
-        if 0.3 < aspect < 3.5:
+        if MIN_ASPECT_RATIO < aspect < MAX_ASPECT_RATIO:
             candidates.append((x, y, w, h))
 
-    print(f"detect_cards retained {len(candidates)} candidate boxes after area/aspect filtering")
+    logger.debug(f"detect_cards retained {len(candidates)} candidate boxes after area/aspect filtering")
 
     # Apply non-maximum suppression to reduce duplicates
-    boxes = non_max_suppression(candidates, overlap_thresh=0.5)
+    boxes = non_max_suppression(candidates, overlap_thresh=INITIAL_NMS_OVERLAP_THRESHOLD)
 
     # Additional splitting for boxes that likely contain multiple cards
     split_boxes: List[Tuple[int, int, int, int]] = []
@@ -110,8 +125,8 @@ def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
         split_boxes.extend(_split_if_needed(image, box, depth=0))
 
     # Apply non-maximum suppression again to remove overlaps after splitting
-    final_boxes = non_max_suppression(split_boxes, overlap_thresh=0.3)
-    print(f"detect_cards returning {len(final_boxes)} final boxes after suppression and splitting")
+    final_boxes = non_max_suppression(split_boxes, overlap_thresh=FINAL_NMS_OVERLAP_THRESHOLD)
+    logger.debug(f"detect_cards returning {len(final_boxes)} final boxes after suppression and splitting")
     # Sort by y then x for consistent ordering
     final_boxes.sort(key=lambda b: (b[1], b[0]))
     return final_boxes
@@ -135,9 +150,8 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
     Returns:
         A list of bounding boxes; either the original box or smaller splits.
     """
-    print(f"_split_if_needed called with box={box} at depth={depth}")
-    MAX_DEPTH = 2
-    if depth >= MAX_DEPTH:
+    logger.debug(f"_split_if_needed called with box={box} at depth={depth}")
+    if depth >= MAX_SPLIT_RECURSION_DEPTH:
         return [box]
     x, y, w, h = box
     # Determine if box is likely to contain more than one card
@@ -152,14 +166,15 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
 
     # Helper to perform vertical split
     def vertical_splits() -> List[int]:
-        print(f"vertical_splits evaluating box width {w}")
+        logger.debug(f"vertical_splits evaluating box width {w}")
         col_sum = np.sum(edges, axis=0)
         # Normalize and invert so that spaces (between cards) have high values
         # Add a small epsilon to avoid division by zero
         max_val = np.max(col_sum) + 1e-6
         inv = 1.0 - (col_sum / max_val)
         # Smooth via 1D convolution
-        smooth = np.convolve(inv, np.ones(11) / 11.0, mode='same')
+        smoothing_kernel = np.ones(SMOOTHING_KERNEL_SIZE) / SMOOTHING_KERNEL_SIZE
+        smooth = np.convolve(inv, smoothing_kernel, mode='same')
         # Identify regions where the smooth signal exceeds a threshold
         threshold = np.mean(smooth) + np.std(smooth) * 0.5
         candidates = np.where(smooth > threshold)[0]
@@ -176,7 +191,7 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
             prev = c
         boundaries.append((start, prev))
         # Filter segments that are wide enough to plausibly be between cards
-        min_width = w * 0.05
+        min_width = w * MIN_SPLIT_WIDTH_RATIO
         centers = []
         for s, e in boundaries:
             if (e - s) >= min_width:
@@ -184,11 +199,12 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
         return centers
 
     def horizontal_splits() -> List[int]:
-        print(f"horizontal_splits evaluating box height {h}")
+        logger.debug(f"horizontal_splits evaluating box height {h}")
         row_sum = np.sum(edges, axis=1)
         max_val = np.max(row_sum) + 1e-6
         inv = 1.0 - (row_sum / max_val)
-        smooth = np.convolve(inv, np.ones(11) / 11.0, mode='same')
+        smoothing_kernel = np.ones(SMOOTHING_KERNEL_SIZE) / SMOOTHING_KERNEL_SIZE
+        smooth = np.convolve(inv, smoothing_kernel, mode='same')
         threshold = np.mean(smooth) + np.std(smooth) * 0.5
         candidates = np.where(smooth > threshold)[0]
         if len(candidates) == 0:
@@ -202,7 +218,7 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
                 start = r
             prev = r
         boundaries.append((start, prev))
-        min_height = h * 0.05
+        min_height = h * MIN_SPLIT_HEIGHT_RATIO
         centers = []
         for s, e in boundaries:
             if (e - s) >= min_height:
@@ -210,7 +226,7 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
         return centers
 
     # If width dominates height, try splitting vertically
-    if aspect > 1.2:
+    if aspect > SPLIT_ASPECT_RATIO_THRESHOLD:
         centers = vertical_splits()
         if centers:
             # Compute boundaries from centers
@@ -224,7 +240,7 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
                 splits.extend(_split_if_needed(image, sub_box, depth + 1))
             return splits
     # If height dominates width, try splitting horizontally
-    if (1 / aspect) > 1.2:
+    if (1 / aspect) > SPLIT_ASPECT_RATIO_THRESHOLD:
         centers = horizontal_splits()
         if centers:
             boundaries = [0] + centers + [h]
@@ -251,7 +267,7 @@ def process_image(data: bytes) -> List[Tuple[str, bytes]]:
         A list of tuples, each containing the detected card name and the JPEG bytes of the
         cropped card.
     """
-    print(f"process_image called with data length {len(data)} bytes")
+    logger.debug(f"process_image called with data length {len(data)} bytes")
     # Decode image from bytes
     file_bytes = np.asarray(bytearray(data), dtype=np.uint8)
     image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
