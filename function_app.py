@@ -95,27 +95,3 @@ def process_blob(inputBlob: func.InputStream) -> None:
 
     _process_blob_bytes(inputBlob.name, blob_bytes, processed_container)
 
-
-@app.function_name(name="ProcessTimer")
-@app.schedule(schedule="0 0 */6 * * *", arg_name="mytimer", run_on_startup=False, use_monitor=True)
-def process_timer(mytimer: func.TimerRequest) -> None:
-    """Scheduled function that scans the input container for unprocessed images."""
-    utc_now = datetime.utcnow().isoformat()
-    logging.info("Timer trigger fired at %s", utc_now)
-
-    service_client, processed_container = _get_storage_clients()
-    if not service_client or not processed_container:
-        return
-
-    input_container = service_client.get_container_client(INPUT_CONTAINER_NAME)
-
-    for blob in input_container.list_blobs():
-        blob_client = input_container.get_blob_client(blob)
-        logging.info("Processing blob: %s", blob.name)
-        try:
-            blob_bytes = blob_client.download_blob().readall()
-        except Exception as exc:
-            logging.error("Failed to download blob %s: %s", blob.name, exc)
-            continue
-
-        _process_blob_bytes(blob.name, blob_bytes, processed_container)
