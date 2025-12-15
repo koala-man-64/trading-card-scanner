@@ -19,7 +19,8 @@ jobs:
       contents: read
     env:
       AZURE_FUNCTIONAPP_NAME: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
-      AZURE_FUNCTIONAPP_PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      AZURE_RESOURCE_GROUP: tcs-rg
       AZURE_FUNCTIONAPP_SLOT_NAME: ${{ secrets.AZURE_FUNCTIONAPP_SLOT_NAME }}
 
     steps:
@@ -30,10 +31,10 @@ jobs:
 
       - name: Validate required secrets
         run: |
-          if [ -z "${AZURE_FUNCTIONAPP_NAME}" ] || [ -z "${AZURE_FUNCTIONAPP_PUBLISH_PROFILE}" ]; then
+          if [ -z "${AZURE_FUNCTIONAPP_NAME}" ] || [ -z "${AZURE_CREDENTIALS}" ]; then
             echo "Missing required secrets:"
             echo "  - AZURE_FUNCTIONAPP_NAME"
-            echo "  - AZURE_FUNCTIONAPP_PUBLISH_PROFILE"
+            echo "  - AZURE_CREDENTIALS"
             exit 1
           fi
 
@@ -48,20 +49,43 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt --target=".python_packages/lib/site-packages"
 
-      - name: Deploy to Azure Functions (slot)
+      - name: Create deployment zip
+        shell: bash
+        run: |
+          zip -r functionapp.zip . \
+            -x ".git/*" \
+            -x ".git/**" \
+            -x ".venv/*" \
+            -x ".venv/**" \
+            -x ".pytest_cache/*" \
+            -x ".pytest_cache/**" \
+            -x "__pycache__/*" \
+            -x "__pycache__/**" \
+            -x "Tests/*" \
+            -x "Tests/**" \
+            -x "local.settings.json" \
+            -x ".env"
+
+      - name: Azure login (service principal)
+        uses: azure/login@v2
+        with:
+          creds: ${{ env.AZURE_CREDENTIALS }}
+
+      - name: Deploy zip (slot)
         if: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME != '' }}
-        uses: Azure/functions-action@v1
-        with:
-          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
-          publish-profile: ${{ env.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
-          slot-name: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME }}
-          package: .
+        shell: bash
+        run: |
+          az functionapp deployment source config-zip \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --name "${AZURE_FUNCTIONAPP_NAME}" \
+            --slot "${AZURE_FUNCTIONAPP_SLOT_NAME}" \
+            --src "functionapp.zip"
 
-      - name: Deploy to Azure Functions (production)
+      - name: Deploy zip (production)
         if: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME == '' }}
-        uses: Azure/functions-action@v1
-        with:
-          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
-          publish-profile: ${{ env.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
-          package: .
-
+        shell: bash
+        run: |
+          az functionapp deployment source config-zip \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --name "${AZURE_FUNCTIONAPP_NAME}" \
+            --src "functionapp.zip"
