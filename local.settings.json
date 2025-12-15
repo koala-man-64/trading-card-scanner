@@ -1,0 +1,12 @@
+﻿{
+    "IsEncrypted":  false,
+    "Values":  {
+                   "AzureWebJobsStorage":  "DefaultEndpointsProtocol=https;EndpointSuffix=core.windows.net;AccountName=tcsstorageeastus2;AccountKey=/HYyhR/GwqhR/MtxumJO8vYgZHGwhKn08x8XLD86L8IbR21wlitao3rLr+rg+KPjUeH34Jkkg8+r+AStCHkrvQ==;BlobEndpoint=https://tcsstorageeastus2.blob.core.windows.net/;FileEndpoint=https://tcsstorageeastus2.file.core.windows.net/;QueueEndpoint=https://tcsstorageeastus2.queue.core.windows.net/;TableEndpoint=https://tcsstorageeastus2.table.core.windows.net/",
+                   "FUNCTIONS_WORKER_RUNTIME":  "python",
+                   "STORAGE_ACCOUNT_NAME":  "tcsstorageeastus2"
+               },
+    "Host":  {
+                 "LocalHttpPort":  7071,
+                 "CORS":  "*"
+             }
+}

@@ -1,0 +1,97 @@
+name: CI (test) and Deploy (main)
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          python -m pytest -q -m "not integration"
+
+      - name: Run integration tests
+        if: ${{ env.AZURE_STORAGE_CONNECTION_STRING != '' }}
+        env:
+          DELETE_TEST_OUTPUT_CONTAINER: "1"
+          TEST_OUTPUT_CONTAINER: processed-tests-ci
+          TEST_CARD_FOLDER: ci-${{ github.run_id }}
+        run: |
+          python -m pytest -q -m integration
+
+  deploy:
+    needs: tests
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AZURE_FUNCTIONAPP_NAME: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
+      AZURE_FUNCTIONAPP_PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+      AZURE_FUNCTIONAPP_SLOT_NAME: ${{ secrets.AZURE_FUNCTIONAPP_SLOT_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          if [ -z "${AZURE_FUNCTIONAPP_NAME}" ] || [ -z "${AZURE_FUNCTIONAPP_PUBLISH_PROFILE}" ]; then
+            echo "Missing required secrets:"
+            echo "  - AZURE_FUNCTIONAPP_NAME"
+            echo "  - AZURE_FUNCTIONAPP_PUBLISH_PROFILE"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Build deploy package (.python_packages)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt --target=".python_packages/lib/site-packages"
+
+      - name: Deploy to Azure Functions (slot)
+        if: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME != '' }}
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          publish-profile: ${{ env.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+          slot-name: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME }}
+          package: .
+
+      - name: Deploy to Azure Functions (production)
+        if: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME == '' }}
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          publish-profile: ${{ env.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+          package: .
