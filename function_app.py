@@ -24,16 +24,13 @@ def _get_storage_clients() -> Tuple[Optional[BlobServiceClient], Optional[Contai
         logging.error("AzureWebJobsStorage connection string not found in environment")
         return None, None
 
-    service_client = BlobServiceClient.from_connection_string(connection)
-    processed_container = service_client.get_container_client(PROCESSED_CONTAINER_NAME)
     try:
-        processed_container.create_container()
-    except ResourceExistsError:
-        logging.info("Container '%s' already exists", PROCESSED_CONTAINER_NAME)
+        service_client = BlobServiceClient.from_connection_string(connection)
+        processed_container = service_client.get_container_client(PROCESSED_CONTAINER_NAME)
+        return service_client, processed_container
     except Exception as exc:
-        logging.error("Failed to create/get container '%s': %s", PROCESSED_CONTAINER_NAME, exc)
-        raise
-    return service_client, processed_container
+        logging.error("Failed to create blob service client: %s", exc)
+        return None, None
 
 
 def _build_processed_card_name(source_name: str, idx: int) -> str:

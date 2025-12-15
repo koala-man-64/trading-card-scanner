@@ -79,6 +79,29 @@ jobs:
             --name "${AZURE_FUNCTIONAPP_NAME}" \
             --settings "INPUT_CONTAINER_NAME=input" "PROCESSED_CONTAINER_NAME=processed"
 
+      - name: Create Storage Containers
+        shell: bash
+        run: |
+          STORAGE_CONNECTION_STRING=$(az functionapp config appsettings list \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --name "${AZURE_FUNCTIONAPP_NAME}" \
+            --query "[?name=='AzureWebJobsStorage'].value" -o tsv)
+
+          if [ -z "$STORAGE_CONNECTION_STRING" ]; then
+            echo "AzureWebJobsStorage connection string not found."
+            exit 1
+          fi
+
+          az storage container create \
+            --name "input" \
+            --connection-string "$STORAGE_CONNECTION_STRING" \
+            --fail-on-exist false
+
+          az storage container create \
+            --name "processed" \
+            --connection-string "$STORAGE_CONNECTION_STRING" \
+            --fail-on-exist false
+
 
       - name: Deploy zip (slot)
         if: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME != '' }}
