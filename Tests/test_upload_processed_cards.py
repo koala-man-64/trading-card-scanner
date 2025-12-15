@@ -229,7 +229,7 @@ def test_upload_parsing_results_to_input_container_under_card_folder(monkeypatch
 
     # Parse cards from the sample input image.
     input_bytes = _read_sample("sample input 1.jpg")
-    crops = process_utils.process_image(input_bytes)
+    crops = process_utils.extract_card_crops_from_image_bytes(input_bytes)
     assert crops, "Expected at least one parsed card crop from sample input"
 
     # Upload a small subset (first 3) to keep the test fast and the container tidy.

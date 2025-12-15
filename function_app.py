@@ -66,7 +66,7 @@ def _save_processed_cards_to_folder(output_dir: Union[Path, str], source_name: s
 
 def _process_blob_bytes(source_name: str, blob_bytes: bytes, processed_container: ContainerClient) -> None:
     """Run card processing pipeline for a blob and upload results."""
-    cards = process_utils.process_image(blob_bytes)
+    cards = process_utils.extract_card_crops_from_image_bytes(blob_bytes)
     if not cards:
         logging.info("No cards detected in %s", source_name)
         return

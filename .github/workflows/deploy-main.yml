@@ -21,7 +21,6 @@ jobs:
       AZURE_FUNCTIONAPP_NAME: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
       AZURE_RESOURCE_GROUP: tcs-rg
-      AZURE_FUNCTIONAPP_SLOT_NAME: ${{ secrets.AZURE_FUNCTIONAPP_SLOT_NAME }}
 
     steps:
       - name: Checkout
