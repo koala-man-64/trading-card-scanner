@@ -12,6 +12,10 @@ from CardProcessor import process_utils
 
 app = func.FunctionApp()
 
+# Define container names from environment variables with defaults
+PROCESSED_CONTAINER_NAME = os.environ.get("PROCESSED_CONTAINER_NAME", "processed")
+INPUT_CONTAINER_NAME = os.environ.get("INPUT_CONTAINER_NAME", "input")
+
 
 def _get_storage_clients() -> Tuple[Optional[BlobServiceClient], Optional[ContainerClient]]:
     """Return storage service and processed container clients if configured."""
@@ -21,13 +25,13 @@ def _get_storage_clients() -> Tuple[Optional[BlobServiceClient], Optional[Contai
         return None, None
 
     service_client = BlobServiceClient.from_connection_string(connection)
-    processed_container = service_client.get_container_client("processed")
+    processed_container = service_client.get_container_client(PROCESSED_CONTAINER_NAME)
     try:
         processed_container.create_container()
     except ResourceExistsError:
-        logging.info("Container 'processed' already exists")
+        logging.info("Container '%s' already exists", PROCESSED_CONTAINER_NAME)
     except Exception as exc:
-        logging.error("Failed to create/get container 'processed': %s", exc)
+        logging.error("Failed to create/get container '%s': %s", PROCESSED_CONTAINER_NAME, exc)
         raise
     return service_client, processed_container
 
@@ -74,7 +78,7 @@ def _process_blob_bytes(source_name: str, blob_bytes: bytes, processed_container
 
 
 @app.function_name(name="ProcessBlob")
-@app.blob_trigger(arg_name="inputBlob", path="input/{name}", connection="AzureWebJobsStorage")
+@app.blob_trigger(arg_name="inputBlob", path=f"{INPUT_CONTAINER_NAME}/{{name}}", connection="AzureWebJobsStorage")
 def process_blob(inputBlob: func.InputStream) -> None:
     """Blob trigger to process trading card images uploaded to the input container."""
     logging.info("Processing blob: %s", inputBlob.name)
@@ -103,7 +107,7 @@ def process_timer(mytimer: func.TimerRequest) -> None:
     if not service_client or not processed_container:
         return
 
-    input_container = service_client.get_container_client("input")
+    input_container = service_client.get_container_client(INPUT_CONTAINER_NAME)
 
     for blob in input_container.list_blobs():
         blob_client = input_container.get_blob_client(blob)

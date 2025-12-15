@@ -71,6 +71,15 @@ jobs:
         with:
           creds: ${{ env.AZURE_CREDENTIALS }}
 
+      - name: Set Azure Function App Settings
+        shell: bash
+        run: |
+          az functionapp config appsettings set \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --name "${AZURE_FUNCTIONAPP_NAME}" \
+            --settings "INPUT_CONTAINER_NAME=input" "PROCESSED_CONTAINER_NAME=processed"
+
+
       - name: Deploy zip (slot)
         if: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME != '' }}
         shell: bash
