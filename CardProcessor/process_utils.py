@@ -1,7 +1,6 @@
-import io
-import os
-import uuid
-from typing import List, Tuple
+import logging
+import re
+from typing import List, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -12,27 +11,25 @@ try:
 except ImportError:
     pytesseract = None  # type: ignore
 
+logger = logging.getLogger(__name__)
 
-def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: float = 0.3) -> List[Tuple[int, int, int, int]]:
-    """Apply non‑maximum suppression to a list of bounding boxes.
+BoundingBox = Tuple[int, int, int, int]  # (x, y, w, h)
 
-    This helps remove duplicate/overlapping detections that often occur
-    when multiple contours are found for the same card.
+
+def suppress_overlapping_boxes(boxes: Sequence[BoundingBox], iou_threshold: float = 0.3) -> List[BoundingBox]:
+    """Filter overlapping bounding boxes using non-maximum suppression.
 
     Args:
-        boxes: List of bounding boxes in (x, y, w, h) format.
-        overlap_thresh: Intersection over union (IOU) threshold to discard overlaps.
+        boxes: Bounding boxes in (x, y, w, h) format.
+        iou_threshold: IoU threshold above which a box is discarded.
 
     Returns:
-        A filtered list of bounding boxes.
+        Filtered bounding boxes.
     """
-    print(f"non_max_suppression called with {len(boxes)} boxes and overlap_thresh={overlap_thresh}")
     if not boxes:
         return []
 
-    # Convert to float numpy array for computation
-    rects = np.array(boxes, dtype=float)
-    # Compute bottom right coordinates
+    rects = np.array(list(boxes), dtype=float)
     x1 = rects[:, 0]
     y1 = rects[:, 1]
     x2 = rects[:, 0] + rects[:, 2]
@@ -40,278 +37,231 @@ def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: 
     areas = rects[:, 2] * rects[:, 3]
     order = areas.argsort()[::-1]  # sort by area descending
 
-    keep = []
+    keep: List[BoundingBox] = []
     while len(order) > 0:
-        i = order[0]
-        keep.append(boxes[int(i)])
-        # compute intersection areas with the rest
+        i = int(order[0])
+        keep.append((int(rects[i, 0]), int(rects[i, 1]), int(rects[i, 2]), int(rects[i, 3])))
+
         xx1 = np.maximum(x1[i], x1[order[1:]])
         yy1 = np.maximum(y1[i], y1[order[1:]])
         xx2 = np.minimum(x2[i], x2[order[1:]])
         yy2 = np.minimum(y2[i], y2[order[1:]])
 
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
-        union = areas[i] + areas[order[1:]] - inter
-        # Compute IOU
-        iou = inter / (union + 1e-6)
-        # Keep boxes with IOU less than threshold
-        inds = np.where(iou <= overlap_thresh)[0]
+        inter_w = np.maximum(0.0, xx2 - xx1)
+        inter_h = np.maximum(0.0, yy2 - yy1)
+        intersection = inter_w * inter_h
+        union = areas[i] + areas[order[1:]] - intersection
+
+        iou = intersection / (union + 1e-6)
+        inds = np.where(iou <= iou_threshold)[0]
         order = order[inds + 1]
 
     return keep
 
 
-def detect_cards(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
-    """Detect potential trading card slabs in an image.
+def non_max_suppression(boxes: List[BoundingBox], overlap_thresh: float = 0.3) -> List[BoundingBox]:
+    """Backward-compatible alias for `suppress_overlapping_boxes`."""
+    return suppress_overlapping_boxes(boxes, iou_threshold=overlap_thresh)
 
-    The heuristic relies on edge detection and contour analysis to locate
-    rectangular regions that correspond to individual cards. A non-maximum
-    suppression step is applied to remove overlapping detections.
 
-    Args:
-        image: BGR image as a numpy array.
-
-    Returns:
-        A list of bounding boxes in (x, y, w, h) format.
-    """
-    print(f"detect_cards called with image of shape {image.shape}")
+def detect_card_boxes(image: np.ndarray) -> List[BoundingBox]:
+    """Detect potential trading-card bounding boxes in a BGR image."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Slight blur to smooth noise
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    # Canny edge detection
     edged = cv2.Canny(blurred, 50, 150)
-    # Dilate edges to close gaps
     kernel = np.ones((3, 3), np.uint8)
     dilated = cv2.dilate(edged, kernel, iterations=1)
-    # Find contours
-    cnts, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    print(f"detect_cards found {len(cnts)} contours before filtering")
+
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    logger.debug("detect_card_boxes: found %d contours before filtering", len(contours))
+
     height, width = image.shape[:2]
     min_area = (height * width) * 0.01  # ignore very small contours (<1% of image)
-    max_area = (height * width) * 0.9   # ignore extremely large area (likely the entire image)
-    candidates: List[Tuple[int, int, int, int]] = []
-    for cnt in cnts:
-        area = cv2.contourArea(cnt)
+    max_area = (height * width) * 0.9  # ignore extremely large contour (likely entire image)
+
+    candidates: List[BoundingBox] = []
+    for contour in contours:
+        area = cv2.contourArea(contour)
         if area < min_area or area > max_area:
             continue
-        x, y, w, h = cv2.boundingRect(cnt)
-        # aspect ratio filter: cards are roughly rectangular but not extremely elongated
+
+        x, y, w, h = cv2.boundingRect(contour)
         aspect = w / float(h)
         if 0.3 < aspect < 3.5:
             candidates.append((x, y, w, h))
 
-    print(f"detect_cards retained {len(candidates)} candidate boxes after area/aspect filtering")
+    logger.debug("detect_card_boxes: retained %d candidates after filtering", len(candidates))
+    boxes = suppress_overlapping_boxes(candidates, iou_threshold=0.5)
 
-    # Apply non-maximum suppression to reduce duplicates
-    boxes = non_max_suppression(candidates, overlap_thresh=0.5)
-
-    # Additional splitting for boxes that likely contain multiple cards
-    split_boxes: List[Tuple[int, int, int, int]] = []
+    split_boxes: List[BoundingBox] = []
     for box in boxes:
-        split_boxes.extend(_split_if_needed(image, box, depth=0))
+        split_boxes.extend(_split_box_if_multiple_cards(image, box, recursion_depth=0))
 
-    # Apply non-maximum suppression again to remove overlaps after splitting
-    final_boxes = non_max_suppression(split_boxes, overlap_thresh=0.3)
-    print(f"detect_cards returning {len(final_boxes)} final boxes after suppression and splitting")
-    # Sort by y then x for consistent ordering
+    final_boxes = suppress_overlapping_boxes(split_boxes, iou_threshold=0.3)
     final_boxes.sort(key=lambda b: (b[1], b[0]))
+    logger.debug("detect_card_boxes: returning %d boxes after suppression/splitting", len(final_boxes))
     return final_boxes
 
 
-def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: int = 0) -> List[Tuple[int, int, int, int]]:
-    """Recursively split a bounding box if it appears to contain multiple cards.
+def detect_cards(image: np.ndarray) -> List[BoundingBox]:
+    """Backward-compatible wrapper for `detect_card_boxes`."""
+    return detect_card_boxes(image)
 
-    The heuristic examines the aspect ratio of the box and the distribution
-    of edge intensity within the box. If the width is significantly larger
-    than the height, the box is split vertically where the cumulative edge
-    intensity is low (i.e. between cards). Similarly, if the height is
-    significantly larger than the width, the box is split horizontally. A
-    maximum recursion depth prevents infinite splitting.
 
-    Args:
-        image: The original image.
-        box: Bounding box (x, y, w, h).
-        depth: Current recursion depth.
+def _split_box_if_multiple_cards(
+    image: np.ndarray,
+    box: BoundingBox,
+    recursion_depth: int = 0,
+    *,
+    max_recursion_depth: int = 2,
+) -> List[BoundingBox]:
+    """Split a bounding box if it likely contains multiple cards.
 
-    Returns:
-        A list of bounding boxes; either the original box or smaller splits.
+    The heuristic checks whether a box is unusually wide or tall and attempts to
+    split it along low-edge-density regions (typically gaps between cards).
     """
-    print(f"_split_if_needed called with box={box} at depth={depth}")
-    MAX_DEPTH = 2
-    if depth >= MAX_DEPTH:
+    if recursion_depth >= max_recursion_depth:
         return [box]
+
     x, y, w, h = box
-    # Determine if box is likely to contain more than one card
-    # A typical slab has aspect ratio around 0.6–0.8 (width/height). If the
-    # ratio is much larger or smaller, it may encompass multiple cards.
     aspect = w / float(h)
-    splits: List[Tuple[int, int, int, int]] = []
-    # Convert region to grayscale and detect edges
-    roi = image[y:y + h, x:x + w]
+
+    roi = image[y : y + h, x : x + w]
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150)
 
-    # Helper to perform vertical split
-    def vertical_splits() -> List[int]:
-        print(f"vertical_splits evaluating box width {w}")
-        col_sum = np.sum(edges, axis=0)
-        # Normalize and invert so that spaces (between cards) have high values
-        # Add a small epsilon to avoid division by zero
-        max_val = np.max(col_sum) + 1e-6
-        inv = 1.0 - (col_sum / max_val)
-        # Smooth via 1D convolution
-        smooth = np.convolve(inv, np.ones(11) / 11.0, mode='same')
-        # Identify regions where the smooth signal exceeds a threshold
-        threshold = np.mean(smooth) + np.std(smooth) * 0.5
-        candidates = np.where(smooth > threshold)[0]
-        if len(candidates) == 0:
+    def _candidate_split_centers(*, axis: int, min_segment_fraction: float = 0.05) -> List[int]:
+        projection = np.sum(edges, axis=axis)
+        max_val = np.max(projection) + 1e-6
+        inverted = 1.0 - (projection / max_val)
+        smoothed = np.convolve(inverted, np.ones(11) / 11.0, mode="same")
+        threshold = np.mean(smoothed) + (np.std(smoothed) * 0.5)
+
+        candidate_indices = np.where(smoothed > threshold)[0]
+        if len(candidate_indices) == 0:
             return []
-        # Group contiguous candidates into segments
-        boundaries = []
-        start = candidates[0]
+
+        segments = []
+        start = int(candidate_indices[0])
         prev = start
-        for c in candidates[1:]:
-            if c - prev > 1:
-                boundaries.append((start, prev))
-                start = c
-            prev = c
-        boundaries.append((start, prev))
-        # Filter segments that are wide enough to plausibly be between cards
-        min_width = w * 0.05
-        centers = []
-        for s, e in boundaries:
-            if (e - s) >= min_width:
-                centers.append(int((s + e) / 2))
+        for idx in candidate_indices[1:]:
+            idx_int = int(idx)
+            if idx_int - prev > 1:
+                segments.append((start, prev))
+                start = idx_int
+            prev = idx_int
+        segments.append((start, prev))
+
+        region_size = w if axis == 0 else h
+        min_segment_size = region_size * min_segment_fraction
+        centers: List[int] = []
+        for seg_start, seg_end in segments:
+            if (seg_end - seg_start) >= min_segment_size:
+                centers.append(int((seg_start + seg_end) / 2))
         return centers
 
-    def horizontal_splits() -> List[int]:
-        print(f"horizontal_splits evaluating box height {h}")
-        row_sum = np.sum(edges, axis=1)
-        max_val = np.max(row_sum) + 1e-6
-        inv = 1.0 - (row_sum / max_val)
-        smooth = np.convolve(inv, np.ones(11) / 11.0, mode='same')
-        threshold = np.mean(smooth) + np.std(smooth) * 0.5
-        candidates = np.where(smooth > threshold)[0]
-        if len(candidates) == 0:
-            return []
-        boundaries = []
-        start = candidates[0]
-        prev = start
-        for r in candidates[1:]:
-            if r - prev > 1:
-                boundaries.append((start, prev))
-                start = r
-            prev = r
-        boundaries.append((start, prev))
-        min_height = h * 0.05
-        centers = []
-        for s, e in boundaries:
-            if (e - s) >= min_height:
-                centers.append(int((s + e) / 2))
-        return centers
-
-    # If width dominates height, try splitting vertically
     if aspect > 1.2:
-        centers = vertical_splits()
+        centers = _candidate_split_centers(axis=0)
         if centers:
-            # Compute boundaries from centers
             boundaries = [0] + centers + [w]
+            splits: List[BoundingBox] = []
             for i in range(len(boundaries) - 1):
                 cx0 = boundaries[i]
                 cx1 = boundaries[i + 1]
                 if cx1 - cx0 <= 0:
                     continue
                 sub_box = (x + cx0, y, cx1 - cx0, h)
-                splits.extend(_split_if_needed(image, sub_box, depth + 1))
+                splits.extend(
+                    _split_box_if_multiple_cards(
+                        image,
+                        sub_box,
+                        recursion_depth + 1,
+                        max_recursion_depth=max_recursion_depth,
+                    )
+                )
             return splits
-    # If height dominates width, try splitting horizontally
+
     if (1 / aspect) > 1.2:
-        centers = horizontal_splits()
+        centers = _candidate_split_centers(axis=1)
         if centers:
             boundaries = [0] + centers + [h]
+            splits = []
             for i in range(len(boundaries) - 1):
                 cy0 = boundaries[i]
                 cy1 = boundaries[i + 1]
                 if cy1 - cy0 <= 0:
                     continue
                 sub_box = (x, y + cy0, w, cy1 - cy0)
-                splits.extend(_split_if_needed(image, sub_box, depth + 1))
+                splits.extend(
+                    _split_box_if_multiple_cards(
+                        image,
+                        sub_box,
+                        recursion_depth + 1,
+                        max_recursion_depth=max_recursion_depth,
+                    )
+                )
             return splits
-    # No splitting applied
+
     return [box]
 
 
-def extract_card_name(crop: np.ndarray) -> str:
-    """Attempt to extract the card name from a cropped card image.
-
-    The function looks at the top region of the card—where the label
-    typically resides—and runs OCR on that area. If pytesseract is not
-    available, a fallback placeholder string is returned.
-
-    Args:
-        crop: Cropped card image as a numpy array (BGR).
-
-    Returns:
-        The detected card name or "unknown" if extraction fails.
-    """
-    print("extract_card_name called")
+def extract_card_name_from_crop(crop: np.ndarray) -> str:
+    """Extract a card name from a cropped card image using OCR."""
     if pytesseract is None:
         return "unknown"
-    # Convert to RGB for Pillow
+
     rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb)
-    # Take the top 25% region where the label is typically located
-    w, h = pil_img.size
-    top_h = int(h * 0.25)
-    top_crop = pil_img.crop((0, 0, w, top_h))
-    # Convert to grayscale and increase contrast to aid OCR
-    gray = top_crop.convert("L")
-    # Perform simple threshold to highlight text
-    thresh = gray.point(lambda p: 255 if p > 180 else 0)
-    text = pytesseract.image_to_string(thresh, lang="eng")
+    img_width, img_height = pil_img.size
+
+    label_height = int(img_height * 0.25)
+    label_region = pil_img.crop((0, 0, img_width, label_height))
+
+    gray = label_region.convert("L")
+    thresholded = gray.point(lambda p: 255 if p > 180 else 0)
+    text = pytesseract.image_to_string(thresholded, lang="eng")
+
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return "unknown"
-    # Use the first line as card name, limited length
-    name = lines[0]
-    # Clean up: remove non‑alphanumeric characters (keep spaces, hyphens, apostrophes)
-    import re  # imported here to avoid global import if pytesseract unavailable
-    name = re.sub(r"[^A-Za-z0-9 '\-]", "", name)
-    # If name too short, fallback to unknown
+
+    name = re.sub(r"[^A-Za-z0-9 '\-]", "", lines[0])
     return name if len(name) >= 2 else "unknown"
 
 
-def process_image(data: bytes) -> List[Tuple[str, bytes]]:
-    """Process raw image bytes, crop cards, run OCR and return list of (name, image bytes).
+def extract_card_name(crop: np.ndarray) -> str:
+    """Backward-compatible wrapper for `extract_card_name_from_crop`."""
+    return extract_card_name_from_crop(crop)
 
-    Args:
-        data: JPEG/PNG image bytes.
 
-    Returns:
-        A list of tuples, each containing the detected card name and the JPEG bytes of the
-        cropped card.
-    """
-    print(f"process_image called with data length {len(data)} bytes")
-    # Decode image from bytes
-    file_bytes = np.asarray(bytearray(data), dtype=np.uint8)
+def extract_card_crops_from_image_bytes(image_bytes: bytes) -> List[Tuple[str, bytes]]:
+    """Decode an image, detect cards, and return cropped card JPEG bytes."""
+    file_bytes = np.frombuffer(image_bytes, dtype=np.uint8)
     image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     if image is None:
         return []
-    boxes = detect_cards(image)
+
+    boxes = detect_card_boxes(image)
     results: List[Tuple[str, bytes]] = []
     for x, y, w, h in boxes:
-        # expand bounding box slightly to include borders
         pad = int(min(w, h) * 0.05)
         x0 = max(0, x - pad)
         y0 = max(0, y - pad)
         x1 = min(image.shape[1], x + w + pad)
         y1 = min(image.shape[0], y + h + pad)
         crop = image[y0:y1, x0:x1].copy()
-        # Upload naming is derived from the input file name + index; we do not rely on OCR.
-        name = "unknown"
-        # Encode cropped image back to JPEG for storage
-        _, buf = cv2.imencode('.jpg', crop)
+
+        name = extract_card_name_from_crop(crop)
+        ok, buf = cv2.imencode(".jpg", crop)
+        if not ok:
+            logger.warning("Failed to encode crop as JPEG; skipping crop")
+            continue
+
         results.append((name, buf.tobytes()))
+
     return results
+
+
+def process_image(data: bytes) -> List[Tuple[str, bytes]]:
+    """Backward-compatible wrapper for `extract_card_crops_from_image_bytes`."""
+    return extract_card_crops_from_image_bytes(data)

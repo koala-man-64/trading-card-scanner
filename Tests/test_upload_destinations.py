@@ -68,7 +68,11 @@ def test_save_processed_cards_to_folder_logs_and_continues_on_error(
 def test_process_blob_bytes_uploads_processed_cards(monkeypatch: pytest.MonkeyPatch) -> None:
     container = _StubContainer()
     sample_bytes = _read_sample("sample output 1.jpg")
-    monkeypatch.setattr(function_app.process_utils, "process_image", lambda _: [("Cloud Card", sample_bytes)])
+    monkeypatch.setattr(
+        function_app.process_utils,
+        "extract_card_crops_from_image_bytes",
+        lambda _: [("Cloud Card", sample_bytes)],
+    )
     source_path = str(SAMPLES / "sample input 1.jpg")
 
     function_app._process_blob_bytes(source_path, b"blob-bytes", container)
@@ -78,7 +82,7 @@ def test_process_blob_bytes_uploads_processed_cards(monkeypatch: pytest.MonkeyPa
 
 def test_process_blob_bytes_skips_upload_when_no_cards(monkeypatch: pytest.MonkeyPatch) -> None:
     container = _StubContainer()
-    monkeypatch.setattr(function_app.process_utils, "process_image", lambda _: [])
+    monkeypatch.setattr(function_app.process_utils, "extract_card_crops_from_image_bytes", lambda _: [])
     source_path = str(SAMPLES / "sample input 1.jpg")
 
     function_app._process_blob_bytes(source_path, b"blob-bytes", container)
