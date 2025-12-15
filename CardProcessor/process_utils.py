@@ -7,10 +7,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-try:
-    import pytesseract  # noqa: WPS433
-except ImportError:
-    pytesseract = None  # type: ignore
+
 
 
 def non_max_suppression(boxes: List[Tuple[int, int, int, int]], overlap_thresh: float = 0.3) -> List[Tuple[int, int, int, int]]:
@@ -242,45 +239,6 @@ def _split_if_needed(image: np.ndarray, box: Tuple[int, int, int, int], depth: i
     # No splitting applied
     return [box]
 
-
-def extract_card_name(crop: np.ndarray) -> str:
-    """Attempt to extract the card name from a cropped card image.
-
-    The function looks at the top region of the card—where the label
-    typically resides—and runs OCR on that area. If pytesseract is not
-    available, a fallback placeholder string is returned.
-
-    Args:
-        crop: Cropped card image as a numpy array (BGR).
-
-    Returns:
-        The detected card name or "unknown" if extraction fails.
-    """
-    print("extract_card_name called")
-    if pytesseract is None:
-        return "unknown"
-    # Convert to RGB for Pillow
-    rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb)
-    # Take the top 25% region where the label is typically located
-    w, h = pil_img.size
-    top_h = int(h * 0.25)
-    top_crop = pil_img.crop((0, 0, w, top_h))
-    # Convert to grayscale and increase contrast to aid OCR
-    gray = top_crop.convert("L")
-    # Perform simple threshold to highlight text
-    thresh = gray.point(lambda p: 255 if p > 180 else 0)
-    text = pytesseract.image_to_string(thresh, lang="eng")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return "unknown"
-    # Use the first line as card name, limited length
-    name = lines[0]
-    # Clean up: remove non‑alphanumeric characters (keep spaces, hyphens, apostrophes)
-    import re  # imported here to avoid global import if pytesseract unavailable
-    name = re.sub(r"[^A-Za-z0-9 '\-]", "", name)
-    # If name too short, fallback to unknown
-    return name if len(name) >= 2 else "unknown"
 
 
 def process_image(data: bytes) -> List[Tuple[str, bytes]]:

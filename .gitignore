@@ -1,6 +1,9 @@
 local.settings.json
 
 .python_packages
-__pycache__
 .venv/
 .env
+
+__pycache__/
+*.pyc
+.pytest_cache/
