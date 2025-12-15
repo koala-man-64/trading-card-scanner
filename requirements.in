@@ -1,0 +1,7 @@
+azure-functions
+azure-storage-blob
+opencv-python
+numpy
+Pillow
+pytest
+pytest-cov

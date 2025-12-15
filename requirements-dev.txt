@@ -1,0 +1,3 @@
+# Developer dependencies
+ruff
+mypy

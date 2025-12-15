@@ -21,7 +21,6 @@ Environment knobs for integration tests:
       When truthy, cleanup runs (delete container or delete uploaded prefix).
 """
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -34,21 +33,10 @@ import function_app
 from CardProcessor import process_utils
 from function_app import _upload_processed_cards
 
+from Tests.helpers import get_storage_connection
+
 
 SAMPLES = Path(__file__).parent / "Samples"
-ROOT = Path(__file__).resolve().parents[1]
-LOCAL_SETTINGS = ROOT / "local.settings.json"
-# Azure Storage emulator (Azurite) uses a well-known connection string. This expands
-# the shorthand `UseDevelopmentStorage=true` into explicit endpoints so the
-# `azure-storage-blob` SDK can connect reliably.
-DEVSTORE_CONNECTION = (
-    "DefaultEndpointsProtocol=http;"
-    "AccountName=devstoreaccount1;"
-    "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
-    "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
-    "QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;"
-    "TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
-)
 
 
 def _read_sample(name: str) -> bytes:
@@ -98,47 +86,6 @@ class _FailingFirstUpload:
         if self.calls == 1:
             raise RuntimeError("transient failure")
         self.uploads.append((name, data, overwrite))
-
-
-def _load_settings() -> dict:
-    # Read `local.settings.json` (Azure Functions local dev convention) and return
-    # its `Values` dict. This supports UTF-8 with BOM (common on Windows).
-    if not LOCAL_SETTINGS.exists():
-        return {}
-    try:
-        data = json.loads(LOCAL_SETTINGS.read_text(encoding="utf-8-sig"))
-    except Exception:
-        return {}
-    return data.get("Values", {})
-
-
-def _normalize_connection_string(connection: str) -> str:
-    # If the connection string is `UseDevelopmentStorage=true`, expand it for Azurite.
-    if not connection:
-        return connection
-    if "usedevelopmentstorage=true" in connection.lower():
-        return DEVSTORE_CONNECTION
-    return connection
-
-
-def _get_storage_connection() -> str:
-    # Prefer the standard Azure SDK env var:
-    #   AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=...;AccountName=...;AccountKey=...;...
-    # Fallback to `local.settings.json` so tests can run without exporting env vars.
-    env_connection = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-    if env_connection:
-        connection = _normalize_connection_string(env_connection)
-        os.environ["AZURE_STORAGE_CONNECTION_STRING"] = connection
-        return connection
-
-    values = _load_settings()
-    connection = values.get("AZURE_STORAGE_CONNECTION_STRING") or ""
-    if not connection:
-        return ""
-
-    normalized = _normalize_connection_string(connection)
-    os.environ["AZURE_STORAGE_CONNECTION_STRING"] = normalized
-    return normalized
 
 
 def _card_folder_name() -> str:
@@ -208,7 +155,7 @@ def test_upload_processed_cards_logs_and_continues_on_error(caplog):
 
 
 @pytest.mark.integration
-def test_upload_processed_cards_writes_blobs_to_storage():
+def test_upload_processed_cards_writes_blobs_to_storage(monkeypatch: pytest.MonkeyPatch):
     # Integration test: write blobs into a real Azure container and confirm they can be
     # listed and downloaded.
     #
@@ -216,7 +163,7 @@ def test_upload_processed_cards_writes_blobs_to_storage():
     # - Connection string resolution (`AZURE_STORAGE_CONNECTION_STRING`)
     # - Container creation (or reuse)
     # - `_upload_processed_cards` with a real ContainerClient
-    connection = _get_storage_connection()
+    connection = get_storage_connection(monkeypatch)
     if not connection:
         pytest.skip("AZURE_STORAGE_CONNECTION_STRING not configured in environment or local.settings.json")
 
@@ -255,7 +202,7 @@ def test_upload_processed_cards_writes_blobs_to_storage():
 
 
 @pytest.mark.integration
-def test_upload_parsing_results_to_input_container_under_card_folder():
+def test_upload_parsing_results_to_input_container_under_card_folder(monkeypatch: pytest.MonkeyPatch):
     # Integration test: run the parsing pipeline on a real sample input image, then
     # upload the resulting cropped card images to the `input` container under a
     # "folder" prefix (blob-name prefix).
@@ -264,7 +211,7 @@ def test_upload_parsing_results_to_input_container_under_card_folder():
     # Azure Storage: the images end up under:
     #   container: input
     #   prefix:    <TEST_CARD_FOLDER>/...
-    connection = _get_storage_connection()
+    connection = get_storage_connection(monkeypatch)
     if not connection:
         pytest.skip("AZURE_STORAGE_CONNECTION_STRING not configured in environment or local.settings.json")
 
@@ -282,7 +229,7 @@ def test_upload_parsing_results_to_input_container_under_card_folder():
 
     # Parse cards from the sample input image.
     input_bytes = _read_sample("sample input 1.jpg")
-    crops = process_utils.process_image(input_bytes)
+    crops = process_utils.extract_card_crops_from_image_bytes(input_bytes)
     assert crops, "Expected at least one parsed card crop from sample input"
 
     # Upload a small subset (first 3) to keep the test fast and the container tidy.
