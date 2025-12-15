@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Test Retrieve (Azure Blob)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/Tests/test_local.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "args": [
+        "--input",
+        "${workspaceFolder}\\Tests\\Samples\\sample input 1.jpg",
+        "--output",
+        "${workspaceFolder}\\Tests\\Out"
+      ]
+    },
+    {
+      "name": "Attach to Python Functions",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": {
+        "host": "localhost",
+        "port": 9091
+      },
+      "preLaunchTask": "func: host start"
+    }
+  ]
+}
