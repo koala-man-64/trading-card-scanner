@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Tuple, Union
 
 import azure.functions as func
+from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient, ContainerClient
 
 from CardProcessor import process_utils
@@ -23,22 +24,23 @@ def _get_storage_clients() -> Tuple[Optional[BlobServiceClient], Optional[Contai
     processed_container = service_client.get_container_client("processed")
     try:
         processed_container.create_container()
-    except Exception:
-        # Container already exists
-        pass
+    except ResourceExistsError:
+        logging.info("Container 'processed' already exists")
+    except Exception as exc:
+        logging.error("Failed to create/get container 'processed': %s", exc)
+        raise
     return service_client, processed_container
 
 
-def _build_processed_card_name(source_name: str, idx: int, card_name: str) -> str:
+def _build_processed_card_name(source_name: str, idx: int) -> str:
     base_name = os.path.splitext(os.path.basename(source_name))[0]
-    safe_name = card_name.replace(" ", "_").lower() if card_name != "unknown" else "unknown"
-    return f"{base_name}_{idx}_{safe_name}.jpg"
+    return f"{base_name}_{idx}.jpg"
 
 
 def _upload_processed_cards(processed_container: ContainerClient, source_name: str, cards: Iterable[Tuple[str, bytes]]) -> None:
     """Upload processed card crops to the processed container."""
     for idx, (name, img_bytes) in enumerate(cards, 1):
-        blob_name = _build_processed_card_name(source_name, idx, name)
+        blob_name = _build_processed_card_name(source_name, idx)
         try:
             processed_container.upload_blob(name=blob_name, data=img_bytes, overwrite=True)
             logging.info("Uploaded processed card %s as %s", name, blob_name)
@@ -52,7 +54,7 @@ def _save_processed_cards_to_folder(output_dir: Union[Path, str], source_name: s
     output_path.mkdir(parents=True, exist_ok=True)
 
     for idx, (name, img_bytes) in enumerate(cards, 1):
-        file_name = _build_processed_card_name(source_name, idx, name)
+        file_name = _build_processed_card_name(source_name, idx)
         destination = output_path / file_name
         try:
             destination.write_bytes(img_bytes)

@@ -30,12 +30,13 @@ def test_save_processed_cards_to_folder_writes_files(tmp_path: Path) -> None:
         ("Unknown Hero", _read_sample("sample output 2.jpg")),
         ("unknown", _read_sample("sample output 3.jpg")),
     ]
+    source_path = str(SAMPLES / "sample input 1.jpg")
 
-    function_app._save_processed_cards_to_folder(tmp_path, "folder/My Source.JPG", cards)
+    function_app._save_processed_cards_to_folder(tmp_path, source_path, cards)
 
-    assert (tmp_path / "My Source_1_charizard_v.jpg").read_bytes() == cards[0][1]
-    assert (tmp_path / "My Source_2_unknown_hero.jpg").read_bytes() == cards[1][1]
-    assert (tmp_path / "My Source_3_unknown.jpg").read_bytes() == cards[2][1]
+    assert (tmp_path / "sample input 1_1.jpg").read_bytes() == cards[0][1]
+    assert (tmp_path / "sample input 1_2.jpg").read_bytes() == cards[1][1]
+    assert (tmp_path / "sample input 1_3.jpg").read_bytes() == cards[2][1]
 
 
 def test_save_processed_cards_to_folder_logs_and_continues_on_error(
@@ -46,7 +47,7 @@ def test_save_processed_cards_to_folder_logs_and_continues_on_error(
     original_write_bytes = Path.write_bytes
 
     def _write_bytes_with_failure(path: Path, data: bytes) -> int:
-        if path.name.startswith("input_1_"):
+        if path.name.endswith("_1.jpg"):
             raise OSError("disk full")
         return original_write_bytes(path, data)
 
@@ -55,28 +56,31 @@ def test_save_processed_cards_to_folder_logs_and_continues_on_error(
     first_bytes = _read_sample("sample output 1.jpg")
     second_bytes = _read_sample("sample output 2.jpg")
     cards = [("Card One", first_bytes), ("Card Two", second_bytes)]
+    source_path = str(SAMPLES / "sample input 2.jpg")
     with caplog.at_level(logging.ERROR):
-        function_app._save_processed_cards_to_folder(tmp_path, "input.jpg", cards)
+        function_app._save_processed_cards_to_folder(tmp_path, source_path, cards)
 
     assert "Failed to save processed card Card One" in caplog.text
-    assert not (tmp_path / "input_1_card_one.jpg").exists()
-    assert (tmp_path / "input_2_card_two.jpg").read_bytes() == second_bytes
+    assert not (tmp_path / "sample input 2_1.jpg").exists()
+    assert (tmp_path / "sample input 2_2.jpg").read_bytes() == second_bytes
 
 
 def test_process_blob_bytes_uploads_processed_cards(monkeypatch: pytest.MonkeyPatch) -> None:
     container = _StubContainer()
     sample_bytes = _read_sample("sample output 1.jpg")
     monkeypatch.setattr(function_app.process_utils, "process_image", lambda _: [("Cloud Card", sample_bytes)])
+    source_path = str(SAMPLES / "sample input 1.jpg")
 
-    function_app._process_blob_bytes("cloud/input.jpg", b"blob-bytes", container)
+    function_app._process_blob_bytes(source_path, b"blob-bytes", container)
 
-    assert container.uploads == [("input_1_cloud_card.jpg", sample_bytes, True)]
+    assert container.uploads == [("sample input 1_1.jpg", sample_bytes, True)]
 
 
 def test_process_blob_bytes_skips_upload_when_no_cards(monkeypatch: pytest.MonkeyPatch) -> None:
     container = _StubContainer()
     monkeypatch.setattr(function_app.process_utils, "process_image", lambda _: [])
+    source_path = str(SAMPLES / "sample input 1.jpg")
 
-    function_app._process_blob_bytes("cloud/input.jpg", b"blob-bytes", container)
+    function_app._process_blob_bytes(source_path, b"blob-bytes", container)
 
     assert container.uploads == []

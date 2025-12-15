@@ -309,7 +309,8 @@ def process_image(data: bytes) -> List[Tuple[str, bytes]]:
         x1 = min(image.shape[1], x + w + pad)
         y1 = min(image.shape[0], y + h + pad)
         crop = image[y0:y1, x0:x1].copy()
-        name = extract_card_name(crop)
+        # Upload naming is derived from the input file name + index; we do not rely on OCR.
+        name = "unknown"
         # Encode cropped image back to JPEG for storage
         _, buf = cv2.imencode('.jpg', crop)
         results.append((name, buf.tobytes()))
