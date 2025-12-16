@@ -15,7 +15,9 @@ PROCESSED_CONTAINER_NAME = os.environ.get("PROCESSED_CONTAINER_NAME", "processed
 INPUT_CONTAINER_NAME = os.environ.get("INPUT_CONTAINER_NAME", "input")
 
 
-def _get_storage_clients() -> Tuple[Optional[BlobServiceClient], Optional[ContainerClient]]:
+def _get_storage_clients() -> Tuple[
+    Optional[BlobServiceClient], Optional[ContainerClient]
+]:
     """Return storage service and processed container clients if configured."""
     connection = os.environ.get("AzureWebJobsStorage")
     if not connection:
@@ -24,7 +26,9 @@ def _get_storage_clients() -> Tuple[Optional[BlobServiceClient], Optional[Contai
 
     try:
         service_client = BlobServiceClient.from_connection_string(connection)
-        processed_container = service_client.get_container_client(PROCESSED_CONTAINER_NAME)
+        processed_container = service_client.get_container_client(
+            PROCESSED_CONTAINER_NAME
+        )
         return service_client, processed_container
     except Exception as exc:
         logging.error("Failed to create blob service client: %s", exc)
@@ -74,7 +78,9 @@ def _save_processed_cards_to_folder(
             )
 
 
-def _process_blob_bytes(source_name: str, blob_bytes: bytes, processed_container: ContainerClient) -> None:
+def _process_blob_bytes(
+    source_name: str, blob_bytes: bytes, processed_container: ContainerClient
+) -> None:
     """Run card processing pipeline for a blob and upload results."""
     cards = process_utils.extract_card_crops_from_image_bytes(blob_bytes)
     if not cards:
@@ -109,4 +115,3 @@ def process_blob(inputBlob: func.InputStream) -> None:
         return
 
     _process_blob_bytes(inputBlob.name, blob_bytes, processed_container)
-

@@ -96,4 +96,3 @@ def test_process_blob_bytes_skips_upload_when_no_cards(
     function_app._process_blob_bytes(source_path, b"blob-bytes", container)
 
     assert container.uploads == []
-

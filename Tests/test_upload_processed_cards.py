@@ -91,7 +91,12 @@ class _FailingFirstUpload:
 def _card_folder_name() -> str:
     # "Folder" is represented in Blob Storage as a blob-name prefix.
     # This returns the prefix name to use under the `input` container.
-    folder = (os.environ.get("TEST_CARD_FOLDER") or "test-card-folder").strip().strip("/").strip("\\")
+    folder = (
+        (os.environ.get("TEST_CARD_FOLDER") or "test-card-folder")
+        .strip()
+        .strip("/")
+        .strip("\\")
+    )
     return folder or "test-card-folder"
 
 
@@ -106,7 +111,9 @@ def _delete_prefix(container_client, prefix: str) -> None:
 
     if failures:
         details = "; ".join(f"{name}: {exc}" for name, exc in failures)
-        raise RuntimeError(f"Failed to delete {len(failures)} blobs under prefix '{prefix}': {details}")
+        raise RuntimeError(
+            f"Failed to delete {len(failures)} blobs under prefix '{prefix}': {details}"
+        )
 
 
 def test_upload_processed_cards_builds_names_and_uploads():
