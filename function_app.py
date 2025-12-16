@@ -36,18 +36,28 @@ def _build_processed_card_name(source_name: str, idx: int) -> str:
     return f"{base_name}_{idx}.jpg"
 
 
-def _upload_processed_cards(processed_container: ContainerClient, source_name: str, cards: Iterable[Tuple[str, bytes]]) -> None:
+def _upload_processed_cards(
+    processed_container: ContainerClient,
+    source_name: str,
+    cards: Iterable[Tuple[str, bytes]],
+) -> None:
     """Upload processed card crops to the processed container."""
     for idx, (name, img_bytes) in enumerate(cards, 1):
         blob_name = _build_processed_card_name(source_name, idx)
         try:
-            processed_container.upload_blob(name=blob_name, data=img_bytes, overwrite=True)
+            processed_container.upload_blob(
+                name=blob_name, data=img_bytes, overwrite=True
+            )
             logging.info("Uploaded processed card %s as %s", name, blob_name)
         except Exception as exc:
             logging.error("Failed to upload processed card %s: %s", name, exc)
 
 
-def _save_processed_cards_to_folder(output_dir: Union[Path, str], source_name: str, cards: Iterable[Tuple[str, bytes]]) -> None:
+def _save_processed_cards_to_folder(
+    output_dir: Union[Path, str],
+    source_name: str,
+    cards: Iterable[Tuple[str, bytes]],
+) -> None:
     """Write processed card crops to a local folder."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -59,7 +69,9 @@ def _save_processed_cards_to_folder(output_dir: Union[Path, str], source_name: s
             destination.write_bytes(img_bytes)
             logging.info("Saved processed card %s to %s", name, destination)
         except Exception as exc:
-            logging.error("Failed to save processed card %s to %s: %s", name, destination, exc)
+            logging.error(
+                "Failed to save processed card %s to %s: %s", name, destination, exc
+            )
 
 
 def _process_blob_bytes(source_name: str, blob_bytes: bytes, processed_container: ContainerClient) -> None:
@@ -73,14 +85,21 @@ def _process_blob_bytes(source_name: str, blob_bytes: bytes, processed_container
 
 
 @app.function_name(name="ProcessBlob")
-@app.blob_trigger(arg_name="inputBlob", path=f"{INPUT_CONTAINER_NAME}/{{name}}", connection="AzureWebJobsStorage")
+@app.blob_trigger(
+    arg_name="inputBlob",
+    path=f"{INPUT_CONTAINER_NAME}/{{name}}",
+    connection="AzureWebJobsStorage",
+)
 def process_blob(inputBlob: func.InputStream) -> None:
     """Blob trigger to process trading card images uploaded to the input container."""
     logging.info("Processing blob: %s", inputBlob.name)
 
     _, processed_container = _get_storage_clients()
     if not processed_container:
-        logging.critical("Exiting: Processed container client could not be initialized. Check storage connection string.")
+        logging.critical(
+            "Exiting: Processed container client could not be initialized. "
+            "Check storage connection string."
+        )
         return
 
     try:

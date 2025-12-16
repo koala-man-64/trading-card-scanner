@@ -73,7 +73,9 @@ def detect_card_boxes(image: np.ndarray) -> List[BoundingBox]:
     dilated = cv2.dilate(edged, kernel, iterations=1)
 
     contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    logger.debug("detect_card_boxes: found %d contours before filtering", len(contours))
+    logger.debug(
+        "detect_card_boxes: found %d contours before filtering", len(contours)
+    )
 
     height, width = image.shape[:2]
     min_area = (height * width) * 0.01  # ignore very small contours (<1% of image)
@@ -90,7 +92,9 @@ def detect_card_boxes(image: np.ndarray) -> List[BoundingBox]:
         if 0.3 < aspect < 3.5:
             candidates.append((x, y, w, h))
 
-    logger.debug("detect_card_boxes: retained %d candidates after filtering", len(candidates))
+    logger.debug(
+        "detect_card_boxes: retained %d candidates after filtering", len(candidates)
+    )
     boxes = suppress_overlapping_boxes(candidates, iou_threshold=0.5)
 
     split_boxes: List[BoundingBox] = []
@@ -99,7 +103,10 @@ def detect_card_boxes(image: np.ndarray) -> List[BoundingBox]:
 
     final_boxes = suppress_overlapping_boxes(split_boxes, iou_threshold=0.3)
     final_boxes.sort(key=lambda b: (b[1], b[0]))
-    logger.debug("detect_card_boxes: returning %d boxes after suppression/splitting", len(final_boxes))
+    logger.debug(
+        "detect_card_boxes: returning %d boxes after suppression/splitting",
+        len(final_boxes),
+    )
     return final_boxes
 
 

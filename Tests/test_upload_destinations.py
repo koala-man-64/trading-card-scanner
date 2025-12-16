@@ -65,7 +65,9 @@ def test_save_processed_cards_to_folder_logs_and_continues_on_error(
     assert (tmp_path / "sample input 2_2.jpg").read_bytes() == second_bytes
 
 
-def test_process_blob_bytes_uploads_processed_cards(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_process_blob_bytes_uploads_processed_cards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     container = _StubContainer()
     sample_bytes = _read_sample("sample output 1.jpg")
     monkeypatch.setattr(
@@ -80,11 +82,18 @@ def test_process_blob_bytes_uploads_processed_cards(monkeypatch: pytest.MonkeyPa
     assert container.uploads == [("sample input 1_1.jpg", sample_bytes, True)]
 
 
-def test_process_blob_bytes_skips_upload_when_no_cards(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_process_blob_bytes_skips_upload_when_no_cards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     container = _StubContainer()
-    monkeypatch.setattr(function_app.process_utils, "extract_card_crops_from_image_bytes", lambda _: [])
+    monkeypatch.setattr(
+        function_app.process_utils,
+        "extract_card_crops_from_image_bytes",
+        lambda _: [],
+    )
     source_path = str(SAMPLES / "sample input 1.jpg")
 
     function_app._process_blob_bytes(source_path, b"blob-bytes", container)
 
     assert container.uploads == []
+

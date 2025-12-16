@@ -11,7 +11,9 @@ def test_local_settings_sets_azure_storage(monkeypatch: pytest.MonkeyPatch) -> N
     assert os.environ.get("AZURE_STORAGE_CONNECTION_STRING") == connection
 
 
-def test_blob_service_client_initializes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_blob_service_client_initializes_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     connection = get_storage_connection(monkeypatch)
     client = BlobServiceClient.from_connection_string(connection)
     assert client.account_name

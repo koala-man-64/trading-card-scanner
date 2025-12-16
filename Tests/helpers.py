@@ -51,8 +51,9 @@ def get_storage_connection(monkeypatch: pytest.MonkeyPatch = None) -> str:
     values = load_settings()
     connection = values.get("AZURE_STORAGE_CONNECTION_STRING") or ""
     if not connection:
-        pytest.skip("AZURE_STORAGE_CONNECTION_STRING not configured in env or local.settings.json")
-
+        pytest.skip(
+            "AZURE_STORAGE_CONNECTION_STRING not configured in env or local.settings.json"
+        )
 
     normalized = normalize_connection_string(connection)
     if monkeypatch:

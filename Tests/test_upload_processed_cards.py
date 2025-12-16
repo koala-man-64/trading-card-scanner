@@ -135,7 +135,11 @@ def test_upload_processed_cards_builds_names_and_uploads():
     # `_upload_processed_cards` always sets overwrite=True so reruns replace blobs.
     assert all(overwrite for *_, overwrite in container.uploads)
     # Uploaded content should match the card image bytes passed in.
-    assert [data for _, data, _ in container.uploads] == [cards[0][1], cards[1][1], cards[2][1]]
+    assert [data for _, data, _ in container.uploads] == [
+        cards[0][1],
+        cards[1][1],
+        cards[2][1],
+    ]
 
 
 def test_upload_processed_cards_logs_and_continues_on_error(caplog):
@@ -155,7 +159,9 @@ def test_upload_processed_cards_logs_and_continues_on_error(caplog):
 
 
 @pytest.mark.integration
-def test_upload_processed_cards_writes_blobs_to_storage(monkeypatch: pytest.MonkeyPatch):
+def test_upload_processed_cards_writes_blobs_to_storage(
+    monkeypatch: pytest.MonkeyPatch,
+):
     # Integration test: write blobs into a real Azure container and confirm they can be
     # listed and downloaded.
     #
@@ -165,7 +171,9 @@ def test_upload_processed_cards_writes_blobs_to_storage(monkeypatch: pytest.Monk
     # - `_upload_processed_cards` with a real ContainerClient
     connection = get_storage_connection(monkeypatch)
     if not connection:
-        pytest.skip("AZURE_STORAGE_CONNECTION_STRING not configured in environment or local.settings.json")
+        pytest.skip(
+            "AZURE_STORAGE_CONNECTION_STRING not configured in environment or local.settings.json"
+        )
 
     service_client = BlobServiceClient.from_connection_string(connection)
     container_name = _output_container_name()
@@ -177,10 +185,15 @@ def test_upload_processed_cards_writes_blobs_to_storage(monkeypatch: pytest.Monk
         except Exception as exc:
             # If it already exists, keep going; otherwise skip.
             if "ContainerAlreadyExists" not in str(exc):
-                pytest.skip(f"Could not create/get container for integration test: {exc}")
+                pytest.skip(
+                    f"Could not create/get container for integration test: {exc}"
+                )
 
         # Upload two images into the output container using the production naming scheme.
-        cards = [("Cloud Card", _read_sample("sample output 1.jpg")), ("unknown", _read_sample("sample output 2.jpg"))]
+        cards = [
+            ("Cloud Card", _read_sample("sample output 1.jpg")),
+            ("unknown", _read_sample("sample output 2.jpg")),
+        ]
         source_path = str(SAMPLES / "sample input 1.jpg")
         _upload_processed_cards(container_client, source_path, cards)
 
@@ -198,11 +211,15 @@ def test_upload_processed_cards_writes_blobs_to_storage(monkeypatch: pytest.Monk
             try:
                 container_client.delete_container()
             except Exception as exc:
-                raise RuntimeError(f"Failed to delete container '{container_name}': {exc}") from exc
+                raise RuntimeError(
+                    f"Failed to delete container '{container_name}': {exc}"
+                ) from exc
 
 
 @pytest.mark.integration
-def test_upload_parsing_results_to_input_container_under_card_folder(monkeypatch: pytest.MonkeyPatch):
+def test_upload_parsing_results_to_input_container_under_card_folder(
+    monkeypatch: pytest.MonkeyPatch,
+):
     # Integration test: run the parsing pipeline on a real sample input image, then
     # upload the resulting cropped card images to the `input` container under a
     # "folder" prefix (blob-name prefix).
@@ -213,7 +230,9 @@ def test_upload_parsing_results_to_input_container_under_card_folder(monkeypatch
     #   prefix:    <TEST_CARD_FOLDER>/...
     connection = get_storage_connection(monkeypatch)
     if not connection:
-        pytest.skip("AZURE_STORAGE_CONNECTION_STRING not configured in environment or local.settings.json")
+        pytest.skip(
+            "AZURE_STORAGE_CONNECTION_STRING not configured in environment or local.settings.json"
+        )
 
     service_client = BlobServiceClient.from_connection_string(connection)
     input_container = service_client.get_container_client("input")
@@ -242,7 +261,9 @@ def test_upload_parsing_results_to_input_container_under_card_folder(monkeypatch
         uploads.append((blob_name, img_bytes))
 
     # Validate that the expected blob names exist under the prefix.
-    existing = {blob.name for blob in input_container.list_blobs(name_starts_with=prefix)}
+    existing = {
+        blob.name for blob in input_container.list_blobs(name_starts_with=prefix)
+    }
     assert {name for name, _ in uploads} <= existing
 
     # Validate that at least one blob roundtrips correctly.
