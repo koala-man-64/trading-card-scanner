@@ -98,6 +98,10 @@ def _process_blob_bytes(
 )
 def process_blob(inputBlob: func.InputStream) -> None:
     """Blob trigger to process trading card images uploaded to the input container."""
+    if not inputBlob.name:
+        logging.error("Blob name is missing, cannot process.")
+        return
+
     logging.info("Processing blob: %s", inputBlob.name)
 
     _, processed_container = _get_storage_clients()
