@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 try:
-    import pytesseract  # noqa: WPS433
+    import pytesseract
 except ImportError:
     pytesseract = None  # type: ignore
 

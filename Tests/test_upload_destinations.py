@@ -20,7 +20,7 @@ class _StubContainer:
     def __init__(self) -> None:
         self.uploads = []
 
-    def upload_blob(self, name, data, overwrite):  # noqa: WPS110
+    def upload_blob(self, name, data, overwrite):
         self.uploads.append((name, data, overwrite))
 
 

@@ -1,11 +1,9 @@
 import logging
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional, Tuple, Union
 
 import azure.functions as func
-from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient, ContainerClient
 
 from CardProcessor import process_utils

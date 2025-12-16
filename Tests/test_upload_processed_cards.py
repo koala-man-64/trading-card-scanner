@@ -70,7 +70,7 @@ class _StubContainer:
     def __init__(self) -> None:
         self.uploads = []
 
-    def upload_blob(self, name, data, overwrite):  # noqa: WPS110
+    def upload_blob(self, name, data, overwrite):
         self.uploads.append((name, data, overwrite))
 
 
@@ -81,7 +81,7 @@ class _FailingFirstUpload:
         self.calls = 0
         self.uploads = []
 
-    def upload_blob(self, name, data, overwrite):  # noqa: WPS110
+    def upload_blob(self, name, data, overwrite):
         self.calls += 1
         if self.calls == 1:
             raise RuntimeError("transient failure")
