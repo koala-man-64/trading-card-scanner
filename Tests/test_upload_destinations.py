@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import List, Tuple
 
 import pytest
 
@@ -18,7 +19,7 @@ def _read_sample(name: str) -> bytes:
 
 class _StubContainer:
     def __init__(self) -> None:
-        self.uploads = []
+        self.uploads: List[Tuple[str, bytes, bool]] = []
 
     def upload_blob(self, name, data, overwrite):
         self.uploads.append((name, data, overwrite))
@@ -77,7 +78,7 @@ def test_process_blob_bytes_uploads_processed_cards(
     )
     source_path = str(SAMPLES / "sample input 1.jpg")
 
-    function_app._process_blob_bytes(source_path, b"blob-bytes", container)
+    function_app._process_blob_bytes(source_path, b"blob-bytes", container)  # type: ignore
 
     assert container.uploads == [("sample input 1_1.jpg", sample_bytes, True)]
 
@@ -93,7 +94,6 @@ def test_process_blob_bytes_skips_upload_when_no_cards(
     )
     source_path = str(SAMPLES / "sample input 1.jpg")
 
-    function_app._process_blob_bytes(source_path, b"blob-bytes", container)
+    function_app._process_blob_bytes(source_path, b"blob-bytes", container)  # type: ignore
 
     assert container.uploads == []
-

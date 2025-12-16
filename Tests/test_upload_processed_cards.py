@@ -24,6 +24,7 @@ Environment knobs for integration tests:
 import logging
 import os
 from pathlib import Path
+from typing import List, Tuple
 
 import pytest
 from azure.core.exceptions import ResourceExistsError
@@ -68,7 +69,7 @@ class _StubContainer:
     # A minimal stand-in for `azure.storage.blob.ContainerClient`.
     # It records calls made by `_upload_processed_cards` so we can assert on them.
     def __init__(self) -> None:
-        self.uploads = []
+        self.uploads: List[Tuple[str, bytes, bool]] = []
 
     def upload_blob(self, name, data, overwrite):
         self.uploads.append((name, data, overwrite))
@@ -79,7 +80,7 @@ class _FailingFirstUpload:
     # that `_upload_processed_cards` logs and continues with later cards.
     def __init__(self) -> None:
         self.calls = 0
-        self.uploads = []
+        self.uploads: List[Tuple[str, bytes, bool]] = []
 
     def upload_blob(self, name, data, overwrite):
         self.calls += 1
@@ -91,7 +92,12 @@ class _FailingFirstUpload:
 def _card_folder_name() -> str:
     # "Folder" is represented in Blob Storage as a blob-name prefix.
     # This returns the prefix name to use under the `input` container.
-    folder = (os.environ.get("TEST_CARD_FOLDER") or "test-card-folder").strip().strip("/").strip("\\")
+    folder = (
+        (os.environ.get("TEST_CARD_FOLDER") or "test-card-folder")
+        .strip()
+        .strip("/")
+        .strip("\\")
+    )
     return folder or "test-card-folder"
 
 
@@ -106,7 +112,9 @@ def _delete_prefix(container_client, prefix: str) -> None:
 
     if failures:
         details = "; ".join(f"{name}: {exc}" for name, exc in failures)
-        raise RuntimeError(f"Failed to delete {len(failures)} blobs under prefix '{prefix}': {details}")
+        raise RuntimeError(
+            f"Failed to delete {len(failures)} blobs under prefix '{prefix}': {details}"
+        )
 
 
 def test_upload_processed_cards_builds_names_and_uploads():
