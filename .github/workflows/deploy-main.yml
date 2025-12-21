@@ -6,6 +6,12 @@ on:
       - CI
     types:
       - completed
+  push:
+    branches:
+      ["main"]
+  pull_request:
+    branches:
+      ["main"]
 
 concurrency:
   group: deploy-main
