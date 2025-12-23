@@ -96,12 +96,12 @@ jobs:
 
     env:
       DEPLOY_ENV: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || (github.ref_name == 'main' && 'production' || 'dev') }}
-      AZURE_FUNCTIONAPP_NAME: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
+      AZURE_FUNCTIONAPP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'tcs-rg' }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       AZURE_FUNCTIONAPP_SLOT_NAME: ${{ vars.AZURE_FUNCTIONAPP_SLOT_NAME }}
 
     steps:
@@ -113,8 +113,14 @@ jobs:
       - name: Validate required configuration
         shell: bash
         run: |
-          if [ -z "${AZURE_FUNCTIONAPP_NAME}" ]; then
-            echo "Missing required secret: AZURE_FUNCTIONAPP_NAME"
+          if [ -z "${AZURE_FUNCTIONAPP_NAME}" ] || [ -z "${AZURE_RESOURCE_GROUP}" ]; then
+            echo "Missing required configuration:"
+            if [ -z "${AZURE_FUNCTIONAPP_NAME}" ]; then
+              echo "  - AZURE_FUNCTIONAPP_NAME (Actions environment variable)"
+            fi
+            if [ -z "${AZURE_RESOURCE_GROUP}" ]; then
+              echo "  - AZURE_RESOURCE_GROUP (Actions environment variable)"
+            fi
             exit 1
           fi
 
@@ -172,6 +178,20 @@ jobs:
         uses: azure/login@v2
         with:
           creds: ${{ env.AZURE_CREDENTIALS }}
+
+      - name: Verify Azure target
+        shell: bash
+        run: |
+          az account show --query "{name:name,id:id}" -o json
+          if ! az functionapp show \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --name "${AZURE_FUNCTIONAPP_NAME}" \
+            -o none; then
+            echo "Function App not found in this subscription/resource group."
+            echo "Check AZURE_RESOURCE_GROUP, AZURE_FUNCTIONAPP_NAME, and the subscription in your Azure credentials."
+            az functionapp list --resource-group "${AZURE_RESOURCE_GROUP}" --query "[].name" -o tsv || true
+            exit 1
+          fi
 
       - name: Set Azure Function App Settings
         shell: bash
