@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -39,7 +40,7 @@ def normalize_connection_string(connection: str) -> str:
     return connection
 
 
-def get_storage_connection(monkeypatch: pytest.MonkeyPatch = None) -> str:
+def get_storage_connection(monkeypatch: Optional[pytest.MonkeyPatch] = None) -> str:
     """Resolve storage connection string from env first, then local.settings.json."""
     env_connection = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
     if env_connection:
@@ -51,8 +52,9 @@ def get_storage_connection(monkeypatch: pytest.MonkeyPatch = None) -> str:
     values = load_settings()
     connection = values.get("AZURE_STORAGE_CONNECTION_STRING") or ""
     if not connection:
-        pytest.skip("AZURE_STORAGE_CONNECTION_STRING not configured in env or local.settings.json")
-
+        pytest.skip(
+            "AZURE_STORAGE_CONNECTION_STRING not configured in env or local.settings.json"
+        )
 
     normalized = normalize_connection_string(connection)
     if monkeypatch:

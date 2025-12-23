@@ -37,6 +37,7 @@ def test_process_image_returns_crops_and_valid_bytes(sample_name: str):
 def test_detect_cards_finds_boxes_in_sample_image(sample_name: str):
     data = _read_sample(sample_name)
     img = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert img is not None, "Failed to decode sample image"
 
     boxes = process_utils.detect_card_boxes(img)
     assert boxes, "Expected at least one detected card"

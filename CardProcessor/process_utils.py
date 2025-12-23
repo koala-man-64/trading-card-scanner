@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 BoundingBox = Tuple[int, int, int, int]  # (x, y, w, h)
 
 
-def suppress_overlapping_boxes(boxes: Sequence[BoundingBox], iou_threshold: float = 0.3) -> List[BoundingBox]:
+def suppress_overlapping_boxes(
+    boxes: Sequence[BoundingBox], iou_threshold: float = 0.3
+) -> List[BoundingBox]:
     """Filter overlapping bounding boxes using non-maximum suppression.
 
     Args:
@@ -40,7 +42,9 @@ def suppress_overlapping_boxes(boxes: Sequence[BoundingBox], iou_threshold: floa
     keep: List[BoundingBox] = []
     while len(order) > 0:
         i = int(order[0])
-        keep.append((int(rects[i, 0]), int(rects[i, 1]), int(rects[i, 2]), int(rects[i, 3])))
+        keep.append(
+            (int(rects[i, 0]), int(rects[i, 1]), int(rects[i, 2]), int(rects[i, 3]))
+        )
 
         xx1 = np.maximum(x1[i], x1[order[1:]])
         yy1 = np.maximum(y1[i], y1[order[1:]])
@@ -59,7 +63,9 @@ def suppress_overlapping_boxes(boxes: Sequence[BoundingBox], iou_threshold: floa
     return keep
 
 
-def non_max_suppression(boxes: List[BoundingBox], overlap_thresh: float = 0.3) -> List[BoundingBox]:
+def non_max_suppression(
+    boxes: List[BoundingBox], overlap_thresh: float = 0.3
+) -> List[BoundingBox]:
     """Backward-compatible alias for `suppress_overlapping_boxes`."""
     return suppress_overlapping_boxes(boxes, iou_threshold=overlap_thresh)
 
@@ -77,7 +83,9 @@ def detect_card_boxes(image: np.ndarray) -> List[BoundingBox]:
 
     height, width = image.shape[:2]
     min_area = (height * width) * 0.01  # ignore very small contours (<1% of image)
-    max_area = (height * width) * 0.9  # ignore extremely large contour (likely entire image)
+    max_area = (
+        height * width
+    ) * 0.9  # ignore extremely large contour (likely entire image)
 
     candidates: List[BoundingBox] = []
     for contour in contours:
@@ -90,7 +98,9 @@ def detect_card_boxes(image: np.ndarray) -> List[BoundingBox]:
         if 0.3 < aspect < 3.5:
             candidates.append((x, y, w, h))
 
-    logger.debug("detect_card_boxes: retained %d candidates after filtering", len(candidates))
+    logger.debug(
+        "detect_card_boxes: retained %d candidates after filtering", len(candidates)
+    )
     boxes = suppress_overlapping_boxes(candidates, iou_threshold=0.5)
 
     split_boxes: List[BoundingBox] = []
@@ -99,7 +109,10 @@ def detect_card_boxes(image: np.ndarray) -> List[BoundingBox]:
 
     final_boxes = suppress_overlapping_boxes(split_boxes, iou_threshold=0.3)
     final_boxes.sort(key=lambda b: (b[1], b[0]))
-    logger.debug("detect_card_boxes: returning %d boxes after suppression/splitting", len(final_boxes))
+    logger.debug(
+        "detect_card_boxes: returning %d boxes after suppression/splitting",
+        len(final_boxes),
+    )
     return final_boxes
 
 
@@ -130,7 +143,9 @@ def _split_box_if_multiple_cards(
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150)
 
-    def _candidate_split_centers(*, axis: int, min_segment_fraction: float = 0.05) -> List[int]:
+    def _candidate_split_centers(
+        *, axis: int, min_segment_fraction: float = 0.05
+    ) -> List[int]:
         projection = np.sum(edges, axis=axis)
         max_val = np.max(projection) + 1e-6
         inverted = 1.0 - (projection / max_val)
