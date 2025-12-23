@@ -1,5 +1,9 @@
+import io
+import json
 import logging
 import os
+import re
+import zipfile
 from pathlib import Path
 from typing import Iterable, Optional, Tuple, Union
 
@@ -119,3 +123,72 @@ def process_blob(inputBlob: func.InputStream) -> None:
         return
 
     _process_blob_bytes(inputBlob.name, blob_bytes, processed_container)
+
+
+def _sanitize_zip_member_name(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
+    return safe or "card"
+
+
+@app.function_name(name="Health")
+@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def health(_: func.HttpRequest) -> func.HttpResponse:
+    """Simple health endpoint for Postman/smoke tests."""
+    return func.HttpResponse("OK", status_code=200)
+
+
+@app.function_name(name="ProcessImage")
+@app.route(route="process", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def process_image(req: func.HttpRequest) -> func.HttpResponse:
+    """Process an uploaded image and return detected card crops.
+
+    Send the image bytes as the raw request body.
+
+    Query params:
+      - format=zip|json (default: zip)
+    """
+    output_format = (req.params.get("format") or "zip").lower()
+    image_bytes = req.get_body() or b""
+
+    if not image_bytes:
+        return func.HttpResponse(
+            "Provide image bytes in the request body.", status_code=400
+        )
+
+    cards = process_utils.extract_card_crops_from_image_bytes(image_bytes)
+
+    if output_format == "json":
+        payload = {
+            "card_count": len(cards),
+            "cards": [
+                {"index": idx, "name": name, "bytes": len(img_bytes)}
+                for idx, (name, img_bytes) in enumerate(cards, 1)
+            ],
+        }
+        return func.HttpResponse(
+            body=json.dumps(payload),
+            status_code=200,
+            mimetype="application/json",
+        )
+
+    if output_format != "zip":
+        return func.HttpResponse(
+            "Unsupported format. Use 'zip' or 'json'.", status_code=400
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for idx, (name, img_bytes) in enumerate(cards, 1):
+            member_name = _sanitize_zip_member_name(name or "card")
+            zf.writestr(f"{idx:02d}_{member_name}.jpg", img_bytes)
+
+    headers = {
+        "Content-Disposition": "attachment; filename=processed_cards.zip",
+    }
+    return func.HttpResponse(
+        body=buf.getvalue(),
+        status_code=200,
+        mimetype="application/zip",
+        headers=headers,
+    )
+
