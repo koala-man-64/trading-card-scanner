@@ -1,0 +1,224 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment to deploy
+        required: true
+        type: choice
+        options:
+          - dev
+          - production
+        default: dev
+      ref:
+        description: Branch, tag, or SHA to deploy (optional)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-24.04
+
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
+    env:
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      DELETE_TEST_OUTPUT_CONTAINER: "1"
+      TEST_OUTPUT_CONTAINER: processed-tests-ci
+      TEST_CARD_FOLDER: ci-${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Lint, Format, and Type-Check
+        run: |
+          ruff check .
+          ruff format . --check
+          mypy . --ignore-missing-imports
+
+      - name: Run tests
+        run: python -m pytest -q
+
+  deploy:
+    name: Deploy
+    needs: ci
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+
+    runs-on: ubuntu-latest
+
+    environment: >-
+      ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || (github.ref_name == 'main' && 'production' || 'dev') }}
+
+    concurrency:
+      group: >-
+        deploy-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || (github.ref_name == 'main' && 'production' || 'dev') }}
+      cancel-in-progress: true
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      DEPLOY_ENV: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || (github.ref_name == 'main' && 'production' || 'dev') }}
+      AZURE_FUNCTIONAPP_NAME: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'tcs-rg' }}
+      AZURE_FUNCTIONAPP_SLOT_NAME: ${{ vars.AZURE_FUNCTIONAPP_SLOT_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.ref || github.ref_name) || github.sha }}
+
+      - name: Validate required configuration
+        shell: bash
+        run: |
+          if [ -z "${AZURE_FUNCTIONAPP_NAME}" ]; then
+            echo "Missing required secret: AZURE_FUNCTIONAPP_NAME"
+            exit 1
+          fi
+
+          if [ -n "${AZURE_CREDENTIALS}" ]; then
+            exit 0
+          fi
+
+          if [ -n "${AZURE_CLIENT_ID}" ] && [ -n "${AZURE_TENANT_ID}" ] && [ -n "${AZURE_SUBSCRIPTION_ID}" ]; then
+            exit 0
+          fi
+
+          echo "Azure auth not configured. Set either:"
+          echo "  - AZURE_CREDENTIALS (service principal JSON)"
+          echo "  - AZURE_CLIENT_ID + AZURE_TENANT_ID + AZURE_SUBSCRIPTION_ID (OIDC)"
+          exit 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Build deploy package (.python_packages)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt --target=".python_packages/lib/site-packages"
+
+      - name: Create deployment zip
+        shell: bash
+        run: |
+          zip -r functionapp.zip . \
+            -x ".git/*" \
+            -x ".git/**" \
+            -x ".venv/*" \
+            -x ".venv/**" \
+            -x ".pytest_cache/*" \
+            -x ".pytest_cache/**" \
+            -x "__pycache__/*" \
+            -x "__pycache__/**" \
+            -x "Tests/*" \
+            -x "Tests/**" \
+            -x "local.settings.json" \
+            -x ".env"
+
+      - name: Azure login (OIDC)
+        if: ${{ env.AZURE_CREDENTIALS == '' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure login (service principal JSON)
+        if: ${{ env.AZURE_CREDENTIALS != '' }}
+        uses: azure/login@v2
+        with:
+          creds: ${{ env.AZURE_CREDENTIALS }}
+
+      - name: Set Azure Function App Settings
+        shell: bash
+        run: |
+          az functionapp config appsettings set \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --name "${AZURE_FUNCTIONAPP_NAME}" \
+            --settings "INPUT_CONTAINER_NAME=input" "PROCESSED_CONTAINER_NAME=processed"
+
+      - name: Create Storage Containers
+        shell: bash
+        run: |
+          STORAGE_CONNECTION_STRING=$(az functionapp config appsettings list \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --name "${AZURE_FUNCTIONAPP_NAME}" \
+            --query "[?name=='AzureWebJobsStorage'].value" -o tsv)
+
+          if [ -z "$STORAGE_CONNECTION_STRING" ]; then
+            echo "AzureWebJobsStorage connection string not found."
+            exit 1
+          fi
+
+          az storage container create \
+            --name "input" \
+            --connection-string "$STORAGE_CONNECTION_STRING" \
+            --fail-on-exist false
+
+          az storage container create \
+            --name "processed" \
+            --connection-string "$STORAGE_CONNECTION_STRING" \
+            --fail-on-exist false
+
+      - name: Deploy zip (slot)
+        if: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME != '' }}
+        shell: bash
+        run: |
+          az functionapp deployment source config-zip \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --name "${AZURE_FUNCTIONAPP_NAME}" \
+            --slot "${AZURE_FUNCTIONAPP_SLOT_NAME}" \
+            --src "functionapp.zip"
+
+      - name: Deploy zip (production)
+        if: ${{ env.AZURE_FUNCTIONAPP_SLOT_NAME == '' }}
+        shell: bash
+        run: |
+          az functionapp deployment source config-zip \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --name "${AZURE_FUNCTIONAPP_NAME}" \
+            --src "functionapp.zip"
