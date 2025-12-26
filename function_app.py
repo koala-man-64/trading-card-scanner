@@ -132,7 +132,7 @@ def _sanitize_zip_member_name(value: str) -> str:
 
 @app.function_name(name="Health")
 @app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
-def health(_: func.HttpRequest) -> func.HttpResponse:
+def health(req: func.HttpRequest) -> func.HttpResponse:
     """Simple health endpoint for Postman/smoke tests."""
     return func.HttpResponse("OK", status_code=200)
 
