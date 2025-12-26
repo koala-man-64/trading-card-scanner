@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Iterable, Optional, Tuple, Union
@@ -140,14 +141,32 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
 @app.function_name(name="ProcessImage")
 @app.route(route="process", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def process_image(req: func.HttpRequest) -> func.HttpResponse:
-    """Process an uploaded image and return detected card crops.
+    """Process an uploaded image and optionally return/upload detected card crops.
 
     Send the image bytes as the raw request body.
 
     Query params:
-      - format=zip|json (default: zip)
+      - output=none|return|upload (default: none)
+      - format=zip|json (default: zip; applies when output=return)
     """
-    output_format = (req.params.get("format") or "zip").lower()
+    output_mode = (req.params.get("output") or "").strip().lower()
+    output_format = (req.params.get("format") or "").strip().lower()
+
+    if not output_mode:
+        output_mode = "return" if output_format else "none"
+
+    if output_mode in {"return", "bytes"}:
+        output_mode = "return"
+    elif output_mode in {"upload", "cloud"}:
+        output_mode = "upload"
+    elif output_mode in {"none", "count"}:
+        output_mode = "none"
+    else:
+        return func.HttpResponse(
+            "Unsupported output. Use 'none', 'return', or 'upload'.",
+            status_code=400,
+        )
+
     image_bytes = req.get_body() or b""
 
     if not image_bytes:
@@ -155,7 +174,49 @@ def process_image(req: func.HttpRequest) -> func.HttpResponse:
             "Provide image bytes in the request body.", status_code=400
         )
 
+    if output_mode == "none":
+        payload = {"card_count": process_utils.count_cards_in_image_bytes(image_bytes)}
+        return func.HttpResponse(
+            body=json.dumps(payload),
+            status_code=200,
+            mimetype="application/json",
+        )
+
     cards = process_utils.extract_card_crops_from_image_bytes(image_bytes)
+
+    if output_mode == "upload":
+        _, processed_container = _get_storage_clients()
+        if not processed_container:
+            return func.HttpResponse(
+                "Storage is not configured. Set AzureWebJobsStorage.",
+                status_code=500,
+            )
+
+        source_name = (
+            (req.params.get("name") or "").strip()
+            or req.headers.get("x-file-name")
+            or f"upload_{uuid.uuid4().hex}.jpg"
+        )
+        _upload_processed_cards(processed_container, source_name, cards)
+        blob_names = [
+            _build_processed_card_name(source_name, idx)
+            for idx in range(1, len(cards) + 1)
+        ]
+        payload = {
+            "card_count": len(cards),
+            "uploaded": {
+                "container": PROCESSED_CONTAINER_NAME,
+                "blobs": blob_names,
+            },
+        }
+        return func.HttpResponse(
+            body=json.dumps(payload),
+            status_code=200,
+            mimetype="application/json",
+        )
+
+    if not output_format:
+        output_format = "zip"
 
     if output_format == "json":
         payload = {
@@ -184,6 +245,7 @@ def process_image(req: func.HttpRequest) -> func.HttpResponse:
 
     headers = {
         "Content-Disposition": "attachment; filename=processed_cards.zip",
+        "X-Card-Count": str(len(cards)),
     }
     return func.HttpResponse(
         body=buf.getvalue(),
