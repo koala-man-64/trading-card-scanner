@@ -45,14 +45,28 @@ def _build_processed_card_name(source_name: str, idx: int) -> str:
     return f"{base_name}_{idx}.jpg"
 
 
+def _sanitize_blob_folder_name(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
+    return safe or "cards"
+
+
+def _build_processed_card_folder(source_name: str) -> str:
+    base_name = os.path.splitext(os.path.basename(source_name))[0]
+    return _sanitize_blob_folder_name(base_name)
+
+
 def _upload_processed_cards(
     processed_container: ContainerClient,
     source_name: str,
     cards: Iterable[Tuple[str, bytes]],
+    folder: Optional[str] = None,
 ) -> None:
     """Upload processed card crops to the processed container."""
+    prefix = _sanitize_blob_folder_name(folder) if folder else None
     for idx, (name, img_bytes) in enumerate(cards, 1):
         blob_name = _build_processed_card_name(source_name, idx)
+        if prefix:
+            blob_name = f"{prefix}/{blob_name}"
         try:
             processed_container.upload_blob(
                 name=blob_name, data=img_bytes, overwrite=True
@@ -148,6 +162,7 @@ def process_image(req: func.HttpRequest) -> func.HttpResponse:
     Query params:
       - output=none|return|upload (default: none)
       - format=zip|json (default: zip; applies when output=return)
+    Uploads are stored under a folder prefix derived from the input name.
     """
     output_mode = (req.params.get("output") or "").strip().lower()
     output_format = (req.params.get("format") or "").strip().lower()
@@ -197,15 +212,17 @@ def process_image(req: func.HttpRequest) -> func.HttpResponse:
             or req.headers.get("x-file-name")
             or f"upload_{uuid.uuid4().hex}.jpg"
         )
-        _upload_processed_cards(processed_container, source_name, cards)
+        folder = _build_processed_card_folder(source_name)
+        _upload_processed_cards(processed_container, source_name, cards, folder=folder)
         blob_names = [
-            _build_processed_card_name(source_name, idx)
+            f"{folder}/{_build_processed_card_name(source_name, idx)}"
             for idx in range(1, len(cards) + 1)
         ]
         payload = {
             "card_count": len(cards),
             "uploaded": {
                 "container": PROCESSED_CONTAINER_NAME,
+                "folder": folder,
                 "blobs": blob_names,
             },
         }
