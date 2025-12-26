@@ -249,8 +249,21 @@ def extract_card_name(crop: np.ndarray) -> str:
     return extract_card_name_from_crop(crop)
 
 
+def count_cards_in_image_bytes(image_bytes: bytes) -> int:
+    """Decode an image and return the number of detected cards."""
+    file_bytes = np.frombuffer(image_bytes, dtype=np.uint8)
+    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    if image is None:
+        return 0
+    return len(detect_card_boxes(image))
+
+
 def extract_card_crops_from_image_bytes(image_bytes: bytes) -> List[Tuple[str, bytes]]:
-    """Decode an image, detect cards, and return cropped card JPEG bytes."""
+    """Decode an image, detect cards, and return cropped card JPEG bytes.
+
+    Crops are returned with a stable, generated label (e.g., ``card_1``) rather than
+    attempting OCR-based name extraction.
+    """
     file_bytes = np.frombuffer(image_bytes, dtype=np.uint8)
     image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     if image is None:
@@ -266,13 +279,13 @@ def extract_card_crops_from_image_bytes(image_bytes: bytes) -> List[Tuple[str, b
         y1 = min(image.shape[0], y + h + pad)
         crop = image[y0:y1, x0:x1].copy()
 
-        name = extract_card_name_from_crop(crop)
         ok, buf = cv2.imencode(".jpg", crop)
         if not ok:
             logger.warning("Failed to encode crop as JPEG; skipping crop")
             continue
 
-        results.append((name, buf.tobytes()))
+        label = f"card_{len(results) + 1}"
+        results.append((label, buf.tobytes()))
 
     return results
 

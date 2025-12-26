@@ -1,0 +1,105 @@
+{
+  "info": {
+    "_postman_id": "9c72dd5b-1d2d-4d0d-9e30-0f47a60ee8c7",
+    "name": "Trading Card Scanner",
+    "description": "Select an environment (Local or Azure).\n\nHealth\n- GET {{baseUrl}}/api/health\n\nProcess Image (Body: binary image)\n- POST {{baseUrl}}/api/process (default: output=none)\n- POST {{baseUrl}}/api/process?output=return&format=zip\n- POST {{baseUrl}}/api/process?output=return&format=json\n- POST {{baseUrl}}/api/process?output=upload&name=sample.jpg\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/health"
+      },
+      "response": []
+    },
+	    {
+	      "name": "Process Image (zip)",
+	      "request": {
+	        "method": "POST",
+	        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/octet-stream"
+          }
+        ],
+	        "body": {
+	          "mode": "file",
+	          "file": {
+	            "src": "Tests/Samples/sample input 1.jpg"
+	          }
+	        },
+	        "url": "{{baseUrl}}/api/process?output=return&format=zip"
+	      },
+	      "response": []
+	    },
+	    {
+	      "name": "Process Image (json)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/octet-stream"
+          }
+        ],
+	        "body": {
+	          "mode": "file",
+	          "file": {
+	            "src": "Tests/Samples/sample input 2.jpg"
+	          }
+	        },
+	        "url": "{{baseUrl}}/api/process?output=return&format=json"
+	      },
+	      "response": []
+	    },
+	    {
+	      "name": "Process Image (count only)",
+	      "request": {
+	        "method": "POST",
+	        "header": [
+	          {
+	            "key": "Content-Type",
+	            "value": "application/octet-stream"
+	          }
+	        ],
+	        "body": {
+	          "mode": "file",
+	          "file": {
+	            "src": "Tests/Samples/sample input 1.jpg"
+	          }
+	        },
+	        "url": "{{baseUrl}}/api/process"
+	      },
+	      "response": []
+	    },
+	    {
+	      "name": "Process Image (upload)",
+	      "request": {
+	        "method": "POST",
+	        "header": [
+	          {
+	            "key": "Content-Type",
+	            "value": "application/octet-stream"
+	          }
+	        ],
+	        "body": {
+	          "mode": "file",
+	          "file": {
+	            "src": "Tests/Samples/sample input 1.jpg"
+	          }
+	        },
+	        "url": "{{baseUrl}}/api/process?output=upload&name=sample%20input%201.jpg"
+	      },
+	      "response": []
+	    }
+	  ],
+	  "variable": [
+	    {
+	      "key": "baseUrl",
+      "value": "http://localhost:7071"
+    }
+  ]
+}

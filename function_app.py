@@ -1,5 +1,10 @@
+import io
+import json
 import logging
 import os
+import re
+import uuid
+import zipfile
 from pathlib import Path
 from typing import Iterable, Optional, Tuple, Union
 
@@ -40,14 +45,28 @@ def _build_processed_card_name(source_name: str, idx: int) -> str:
     return f"{base_name}_{idx}.jpg"
 
 
+def _sanitize_blob_folder_name(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
+    return safe or "cards"
+
+
+def _build_processed_card_folder(source_name: str) -> str:
+    base_name = os.path.splitext(os.path.basename(source_name))[0]
+    return _sanitize_blob_folder_name(base_name)
+
+
 def _upload_processed_cards(
     processed_container: ContainerClient,
     source_name: str,
     cards: Iterable[Tuple[str, bytes]],
+    folder: Optional[str] = None,
 ) -> None:
     """Upload processed card crops to the processed container."""
+    prefix = _sanitize_blob_folder_name(folder) if folder else None
     for idx, (name, img_bytes) in enumerate(cards, 1):
         blob_name = _build_processed_card_name(source_name, idx)
+        if prefix:
+            blob_name = f"{prefix}/{blob_name}"
         try:
             processed_container.upload_blob(
                 name=blob_name, data=img_bytes, overwrite=True
@@ -119,3 +138,137 @@ def process_blob(inputBlob: func.InputStream) -> None:
         return
 
     _process_blob_bytes(inputBlob.name, blob_bytes, processed_container)
+
+
+def _sanitize_zip_member_name(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
+    return safe or "card"
+
+
+@app.function_name(name="Health")
+@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def health(req: func.HttpRequest) -> func.HttpResponse:
+    """Simple health endpoint for Postman/smoke tests."""
+    return func.HttpResponse("OK", status_code=200)
+
+
+@app.function_name(name="ProcessImage")
+@app.route(route="process", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def process_image(req: func.HttpRequest) -> func.HttpResponse:
+    """Process an uploaded image and optionally return/upload detected card crops.
+
+    Send the image bytes as the raw request body.
+
+    Query params:
+      - output=none|return|upload (default: none)
+      - format=zip|json (default: zip; applies when output=return)
+    Uploads are stored under a folder prefix derived from the input name.
+    """
+    output_mode = (req.params.get("output") or "").strip().lower()
+    output_format = (req.params.get("format") or "").strip().lower()
+
+    if not output_mode:
+        output_mode = "return" if output_format else "none"
+
+    if output_mode in {"return", "bytes"}:
+        output_mode = "return"
+    elif output_mode in {"upload", "cloud"}:
+        output_mode = "upload"
+    elif output_mode in {"none", "count"}:
+        output_mode = "none"
+    else:
+        return func.HttpResponse(
+            "Unsupported output. Use 'none', 'return', or 'upload'.",
+            status_code=400,
+        )
+
+    image_bytes = req.get_body() or b""
+
+    if not image_bytes:
+        return func.HttpResponse(
+            "Provide image bytes in the request body.", status_code=400
+        )
+
+    if output_mode == "none":
+        payload: dict[str, object] = {
+            "card_count": process_utils.count_cards_in_image_bytes(image_bytes)
+        }
+        return func.HttpResponse(
+            body=json.dumps(payload),
+            status_code=200,
+            mimetype="application/json",
+        )
+
+    cards = process_utils.extract_card_crops_from_image_bytes(image_bytes)
+
+    if output_mode == "upload":
+        _, processed_container = _get_storage_clients()
+        if not processed_container:
+            return func.HttpResponse(
+                "Storage is not configured. Set AzureWebJobsStorage.",
+                status_code=500,
+            )
+
+        source_name = (
+            (req.params.get("name") or "").strip()
+            or req.headers.get("x-file-name")
+            or f"upload_{uuid.uuid4().hex}.jpg"
+        )
+        folder = _build_processed_card_folder(source_name)
+        _upload_processed_cards(processed_container, source_name, cards, folder=folder)
+        blob_names = [
+            f"{folder}/{_build_processed_card_name(source_name, idx)}"
+            for idx in range(1, len(cards) + 1)
+        ]
+        payload = {
+            "card_count": len(cards),
+            "uploaded": {
+                "container": PROCESSED_CONTAINER_NAME,
+                "folder": folder,
+                "blobs": blob_names,
+            },
+        }
+        return func.HttpResponse(
+            body=json.dumps(payload),
+            status_code=200,
+            mimetype="application/json",
+        )
+
+    if not output_format:
+        output_format = "zip"
+
+    if output_format == "json":
+        payload = {
+            "card_count": len(cards),
+            "cards": [
+                {"index": idx, "name": name, "bytes": len(img_bytes)}
+                for idx, (name, img_bytes) in enumerate(cards, 1)
+            ],
+        }
+        return func.HttpResponse(
+            body=json.dumps(payload),
+            status_code=200,
+            mimetype="application/json",
+        )
+
+    if output_format != "zip":
+        return func.HttpResponse(
+            "Unsupported format. Use 'zip' or 'json'.", status_code=400
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for idx, (name, img_bytes) in enumerate(cards, 1):
+            member_name = _sanitize_zip_member_name(name or "card")
+            zf.writestr(f"{idx:02d}_{member_name}.jpg", img_bytes)
+
+    headers = {
+        "Content-Disposition": "attachment; filename=processed_cards.zip",
+        "X-Card-Count": str(len(cards)),
+    }
+    return func.HttpResponse(
+        body=buf.getvalue(),
+        status_code=200,
+        mimetype="application/zip",
+        headers=headers,
+    )
