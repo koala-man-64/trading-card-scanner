@@ -253,4 +253,3 @@ def process_image(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/zip",
         headers=headers,
     )
-
