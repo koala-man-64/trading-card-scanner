@@ -17,6 +17,7 @@ def get_devstore_connection_string() -> str:
     connection = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
     if not connection or "devstoreaccount1" not in connection:
         pytest.skip("AZURE_STORAGE_CONNECTION_STRING for dev store not configured.")
+    assert connection is not None
     return connection
 
 

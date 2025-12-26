@@ -190,7 +190,9 @@ def process_image(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     if output_mode == "none":
-        payload = {"card_count": process_utils.count_cards_in_image_bytes(image_bytes)}
+        payload: dict[str, object] = {
+            "card_count": process_utils.count_cards_in_image_bytes(image_bytes)
+        }
         return func.HttpResponse(
             body=json.dumps(payload),
             status_code=200,
