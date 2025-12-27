@@ -5,7 +5,11 @@ from PIL import Image
 
 from CardProcessor.image_io import load_rgb_image
 from CardProcessor.layout_crops import attach_crops
-from CardProcessor.layout_post import assign_reading_order, clamp_bbox, to_layout_elements
+from CardProcessor.layout_post import (
+    assign_reading_order,
+    clamp_bbox,
+    to_layout_elements,
+)
 from CardProcessor.layout_types import LayoutElement, RawDetection
 
 
@@ -60,4 +64,3 @@ def test_attach_crops_encodes_bytes():
     assert elements[0].crop_mime == "image/png"
     reopened = Image.open(io.BytesIO(elements[0].crop_bytes))
     assert reopened.size == (10, 10)
-

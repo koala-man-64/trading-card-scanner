@@ -166,7 +166,9 @@ def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
     """Run document layout analysis on uploaded image bytes."""
     image_bytes = req.get_body() or b""
     if not image_bytes:
-        return func.HttpResponse("Provide image bytes in the request body.", status_code=400)
+        return func.HttpResponse(
+            "Provide image bytes in the request body.", status_code=400
+        )
 
     model_variant = (req.params.get("model_variant") or "nano").strip().lower()
     imgsz = int(req.params.get("imgsz") or 1280)
@@ -204,7 +206,9 @@ def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
     body = {
         "image_width": result.image_width,
         "image_height": result.image_height,
-        "elements": [_serialize_element(idx, el) for idx, el in enumerate(result.elements, 1)],
+        "elements": [
+            _serialize_element(idx, el) for idx, el in enumerate(result.elements, 1)
+        ],
         "model_info": result.model_info,
         "errors": result.errors,
     }

@@ -46,4 +46,3 @@ def infer_layout(
                     pass
         detections.extend(res_dets)
     return detections
-

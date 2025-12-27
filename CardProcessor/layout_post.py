@@ -21,7 +21,9 @@ def clamp_bbox(
     return (ix1, iy1, ix2, iy2)
 
 
-def _normalize_bbox(bbox: BBox, width: int, height: int) -> Tuple[float, float, float, float]:
+def _normalize_bbox(
+    bbox: BBox, width: int, height: int
+) -> Tuple[float, float, float, float]:
     x1, y1, x2, y2 = bbox
     return (x1 / width, y1 / height, x2 / width, y2 / height)
 
@@ -68,8 +70,9 @@ def assign_reading_order(elements: List[LayoutElement]) -> List[LayoutElement]:
         for idx, el in enumerate(elements)
         if el.label in _READING_ORDER_LABELS
     ]
-    sorted_pairs = sorted(text_like, key=lambda pair: (pair[1].bbox_xyxy[1], pair[1].bbox_xyxy[0]))
+    sorted_pairs = sorted(
+        text_like, key=lambda pair: (pair[1].bbox_xyxy[1], pair[1].bbox_xyxy[0])
+    )
     for order, (idx, _) in enumerate(sorted_pairs):
         elements[idx].reading_order_hint = order
     return elements
-

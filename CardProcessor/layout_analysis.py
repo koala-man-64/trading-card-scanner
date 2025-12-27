@@ -99,4 +99,3 @@ def analyze_layout_from_image_bytes(
         },
         errors=errors,
     )
-

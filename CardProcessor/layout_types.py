@@ -41,4 +41,3 @@ class LayoutAnalysisResult:
     elements: List[LayoutElement] = field(default_factory=list)
     model_info: Dict[str, object] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
-

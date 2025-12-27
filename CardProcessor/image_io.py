@@ -17,4 +17,3 @@ def load_rgb_image(image_bytes: bytes) -> Image.Image:
     if img.mode != "RGB":
         img = img.convert("RGB")
     return img
-

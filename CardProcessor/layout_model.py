@@ -48,4 +48,3 @@ def get_model(variant: str) -> YOLO:
         model = YOLO(model_path)
         _MODEL_CACHE[variant] = model
         return model
-

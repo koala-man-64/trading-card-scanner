@@ -41,4 +41,3 @@ def attach_crops(
             crop, format=crop_format
         )
     return elements
-
