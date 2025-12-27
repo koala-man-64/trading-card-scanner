@@ -20,7 +20,7 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 1.jpg"},
+                    "file": {"src": "Tests/Samples/input/sample input 1.jpg"},
                 },
                 "url": "{{baseUrl}}/api/process?output=return&format=zip",
             },
@@ -35,7 +35,7 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 2.jpg"},
+                    "file": {"src": "Tests/Samples/input/sample input 2.jpg"},
                 },
                 "url": "{{baseUrl}}/api/process?output=return&format=json",
             },
@@ -50,7 +50,7 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 1.jpg"},
+                    "file": {"src": "Tests/Samples/input/sample input 1.jpg"},
                 },
                 "url": "{{baseUrl}}/api/process",
             },
@@ -65,7 +65,7 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 1.jpg"},
+                    "file": {"src": "Tests/Samples/input/sample input 1.jpg"},
                 },
                 "url": "{{baseUrl}}/api/process?output=upload&name=sample%20input%201.jpg",
             },
@@ -80,7 +80,7 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 1.jpg"},
+                    "file": {"src": "Tests/Samples/input/sample input 1.jpg"},
                 },
                 "url": "{{baseUrl}}/api/layout",
             },
@@ -95,7 +95,7 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 2.jpg"},
+                    "file": {"src": "Tests/Samples/input/sample input 2.jpg"},
                 },
                 "url": "{{baseUrl}}/api/layout?model_variant=small&imgsz=1280&conf=0.3&iou=0.5&extract_crops=true&crop_format=jpeg",
             },

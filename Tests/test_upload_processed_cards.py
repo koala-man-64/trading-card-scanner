@@ -38,15 +38,24 @@ from Tests.helpers import get_storage_connection
 
 
 SAMPLES = Path(__file__).parent / "Samples"
+INPUT_SAMPLES = SAMPLES / "input"
 
 
-def _read_sample(name: str) -> bytes:
-    # Test fixtures are real JPEG files under `Tests/Samples`.
+def _read_sample(name: str, base_dir: Path) -> bytes:
+    # Test fixtures live under `Tests/Samples` (outputs) and `Tests/Samples/input`.
     # These are used instead of placeholder bytes to better mimic production.
-    path = SAMPLES / name
+    path = base_dir / name
     if not path.exists():
         pytest.skip(f"Sample file missing: {path}")
     return path.read_bytes()
+
+
+def _read_output_sample(name: str) -> bytes:
+    return _read_sample(name, SAMPLES)
+
+
+def _read_input_sample(name: str) -> bytes:
+    return _read_sample(name, INPUT_SAMPLES)
 
 
 def _truthy_env(name: str) -> bool:
@@ -124,13 +133,13 @@ def test_upload_processed_cards_builds_names_and_uploads():
     container = _StubContainer()
     # Use real JPEG bytes from `Tests/Samples` to simulate actual images.
     cards = [
-        ("Charizard V", _read_sample("sample output 1.jpg")),
-        ("Unknown Hero", _read_sample("sample output 2.jpg")),
-        ("unknown", _read_sample("sample output 3.jpg")),
+        ("Charizard V", _read_output_sample("sample output 1.jpg")),
+        ("Unknown Hero", _read_output_sample("sample output 2.jpg")),
+        ("unknown", _read_output_sample("sample output 3.jpg")),
     ]
     # The production naming code uses the basename of `source_name`, so we point at
     # a real sample input file to avoid "fake" paths.
-    source_path = str(SAMPLES / "sample input 1.jpg")
+    source_path = str(INPUT_SAMPLES / "sample input 1.jpg")
 
     _upload_processed_cards(container, source_path, cards)
 
@@ -153,10 +162,10 @@ def test_upload_processed_cards_builds_names_and_uploads():
 def test_upload_processed_cards_logs_and_continues_on_error(caplog):
     # Unit test: verify an upload exception is logged and does not stop later uploads.
     container = _FailingFirstUpload()
-    first_bytes = _read_sample("sample output 1.jpg")
-    second_bytes = _read_sample("sample output 2.jpg")
+    first_bytes = _read_output_sample("sample output 1.jpg")
+    second_bytes = _read_output_sample("sample output 2.jpg")
     cards = [("Card One", first_bytes), ("Card Two", second_bytes)]
-    source_path = str(SAMPLES / "sample input 2.jpg")
+    source_path = str(INPUT_SAMPLES / "sample input 2.jpg")
 
     with caplog.at_level(logging.ERROR):
         _upload_processed_cards(container, source_path, cards)
@@ -199,10 +208,10 @@ def test_upload_processed_cards_writes_blobs_to_storage(
 
         # Upload two images into the output container using the production naming scheme.
         cards = [
-            ("Cloud Card", _read_sample("sample output 1.jpg")),
-            ("unknown", _read_sample("sample output 2.jpg")),
+            ("Cloud Card", _read_output_sample("sample output 1.jpg")),
+            ("unknown", _read_output_sample("sample output 2.jpg")),
         ]
-        source_path = str(SAMPLES / "sample input 1.jpg")
+        source_path = str(INPUT_SAMPLES / "sample input 1.jpg")
         _upload_processed_cards(container_client, source_path, cards)
 
         # Verify expected blob names are present.
@@ -255,7 +264,7 @@ def test_upload_parsing_results_to_input_container_under_card_folder(
     prefix = f"{card_folder}/"
 
     # Parse cards from the sample input image.
-    input_bytes = _read_sample("sample input 1.jpg")
+    input_bytes = _read_input_sample("sample input 1.jpg")
     crops = process_utils.extract_card_crops_from_image_bytes(input_bytes)
     assert crops, "Expected at least one parsed card crop from sample input"
 
