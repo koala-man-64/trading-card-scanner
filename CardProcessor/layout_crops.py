@@ -19,7 +19,7 @@ def encode_image_bytes(
     img: Image.Image, *, format: str = "png", quality: int = 90
 ) -> Tuple[bytes, str]:
     buf = BytesIO()
-    save_kwargs = {"format": format.upper()}
+    save_kwargs: dict[str, object] = {"format": format.upper()}
     if format.lower() == "jpeg":
         save_kwargs["quality"] = quality
         save_kwargs["optimize"] = True
