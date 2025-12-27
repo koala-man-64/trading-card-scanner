@@ -34,6 +34,8 @@ jobs:
       DELETE_TEST_OUTPUT_CONTAINER: "1"
       TEST_OUTPUT_CONTAINER: processed-tests-ci
       TEST_CARD_FOLDER: ci-${{ github.run_id }}
+      HUGGINGFACE_HUB_TOKEN: ${{ secrets.HUGGINGFACE_HUB_TOKEN }}
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_HUB_TOKEN }}
 
     steps:
       - name: Checkout
