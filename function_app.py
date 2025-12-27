@@ -1,16 +1,23 @@
-import io
 import base64
+import io
 import json
 import logging
 import os
 import re
 import uuid
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
+from urllib.parse import quote
 
 import azure.functions as func
-from azure.storage.blob import BlobServiceClient, ContainerClient
+from azure.storage.blob import (
+    BlobSasPermissions,
+    BlobServiceClient,
+    ContainerClient,
+    generate_blob_sas,
+)
 
 from CardProcessor import process_utils
 from CardProcessor.layout_analysis import analyze_layout_from_image_bytes
@@ -20,19 +27,24 @@ app = func.FunctionApp()
 # Define container names from environment variables with defaults
 PROCESSED_CONTAINER_NAME = os.environ.get("PROCESSED_CONTAINER_NAME", "processed")
 INPUT_CONTAINER_NAME = os.environ.get("INPUT_CONTAINER_NAME", "input")
+GALLERY_CONTAINER_NAME = os.environ.get(
+    "GALLERY_CONTAINER_NAME", PROCESSED_CONTAINER_NAME
+)
+GALLERY_RAW_PREFIX = os.environ.get("GALLERY_RAW_PREFIX", "raw")
+GALLERY_PROCESSED_PREFIX = os.environ.get("GALLERY_PROCESSED_PREFIX", "processed")
+GALLERY_SEGMENTED_PREFIX = os.environ.get("GALLERY_SEGMENTED_PREFIX", "segmented")
+GALLERY_REFRESH_SECONDS = float(os.environ.get("GALLERY_REFRESH_SECONDS", "5"))
 
 
 def _get_storage_clients() -> Tuple[
     Optional[BlobServiceClient], Optional[ContainerClient]
 ]:
     """Return storage service and processed container clients if configured."""
-    connection = os.environ.get("AzureWebJobsStorage")
-    if not connection:
-        logging.error("AzureWebJobsStorage connection string not found in environment")
+    service_client = _get_storage_service_client()
+    if not service_client:
         return None, None
 
     try:
-        service_client = BlobServiceClient.from_connection_string(connection)
         processed_container = service_client.get_container_client(
             PROCESSED_CONTAINER_NAME
         )
@@ -40,6 +52,91 @@ def _get_storage_clients() -> Tuple[
     except Exception as exc:
         logging.error("Failed to create blob service client: %s", exc)
         return None, None
+
+
+def _get_storage_service_client() -> Optional[BlobServiceClient]:
+    connection = os.environ.get("AzureWebJobsStorage")
+    if not connection:
+        logging.error("AzureWebJobsStorage connection string not found in environment")
+        return None
+
+    try:
+        return BlobServiceClient.from_connection_string(connection)
+    except Exception as exc:
+        logging.error("Failed to create blob service client: %s", exc)
+        return None
+
+
+def _get_container_client(
+    container_name: str,
+) -> Tuple[Optional[BlobServiceClient], Optional[ContainerClient]]:
+    service_client = _get_storage_service_client()
+    if not service_client:
+        return None, None
+
+    try:
+        container_client = service_client.get_container_client(container_name)
+        return service_client, container_client
+    except Exception as exc:
+        logging.error("Failed to create blob container client for %s: %s", container_name, exc)
+        return None, None
+
+
+def _extract_account_key(connection: Optional[str]) -> Optional[str]:
+    if not connection:
+        return None
+
+    for part in connection.split(";"):
+        if part.lower().startswith("accountkey="):
+            return part.split("=", 1)[1]
+    return None
+
+
+def _normalize_prefix(prefix: str) -> str:
+    cleaned = prefix.strip().strip("/")
+    return f"{cleaned}/" if cleaned else ""
+
+
+def _build_blob_url(
+    container_client: ContainerClient, blob_name: str, account_key: Optional[str]
+) -> str:
+    blob_client = container_client.get_blob_client(blob_name)
+    base_url = blob_client.url
+
+    if not account_key:
+        return base_url
+
+    sas_token = generate_blob_sas(
+        account_name=container_client.account_name,
+        container_name=container_client.container_name,
+        blob_name=blob_name,
+        account_key=account_key,
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    return f"{base_url}?{sas_token}"
+
+
+def _list_blob_images(
+    container_client: ContainerClient, prefix: str, account_key: Optional[str]
+) -> List[Dict[str, object]]:
+    blobs = []
+    normalized_prefix = _normalize_prefix(prefix)
+    for blob in container_client.list_blobs(name_starts_with=normalized_prefix):
+        last_modified = (
+            blob.last_modified.astimezone(timezone.utc).isoformat()
+            if getattr(blob, "last_modified", None)
+            else None
+        )
+        blobs.append(
+            {
+                "name": blob.name,
+                "size": blob.size or 0,
+                "last_modified": last_modified,
+                "url": _build_blob_url(container_client, blob.name, account_key),
+            }
+        )
+    return blobs
 
 
 def _build_processed_card_name(source_name: str, idx: int) -> str:
@@ -145,6 +242,230 @@ def process_blob(inputBlob: func.InputStream) -> None:
 def _sanitize_zip_member_name(value: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("_")
     return safe or "card"
+
+
+def _gallery_prefix_for_category(category: str) -> Optional[str]:
+    normalized = category.strip().lower()
+    if normalized == "raw":
+        return GALLERY_RAW_PREFIX
+    if normalized == "processed":
+        return GALLERY_PROCESSED_PREFIX
+    if normalized == "segmented":
+        return GALLERY_SEGMENTED_PREFIX
+    return None
+
+
+@app.function_name(name="GalleryImages")
+@app.route(route="gallery/images", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
+    """Return JSON listing of blobs for the requested gallery category."""
+    category = (req.params.get("category") or "processed").strip().lower()
+    prefix = _gallery_prefix_for_category(category)
+    if prefix is None:
+        return func.HttpResponse(
+            "Unsupported category. Use raw, processed, or segmented.",
+            status_code=400,
+        )
+
+    service_client, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
+    if not container_client:
+        return func.HttpResponse(
+            "Storage is not configured. Set AzureWebJobsStorage.", status_code=500
+        )
+
+    account_key = _extract_account_key(os.environ.get("AzureWebJobsStorage"))
+    try:
+        blobs = _list_blob_images(container_client, prefix, account_key)
+    except Exception as exc:
+        logging.error("Failed to list blobs for gallery: %s", exc)
+        return func.HttpResponse("Failed to list images.", status_code=500)
+
+    payload = {
+        "container": container_client.container_name,
+        "category": category,
+        "prefix": _normalize_prefix(prefix),
+        "blobs": blobs,
+        "refreshed_at": datetime.now(timezone.utc).isoformat(),
+        "refresh_seconds": GALLERY_REFRESH_SECONDS,
+    }
+    return func.HttpResponse(
+        body=json.dumps(payload), status_code=200, mimetype="application/json"
+    )
+
+
+@app.function_name(name="GalleryPage")
+@app.route(route="gallery", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
+    """Serve a minimal gallery UI for browsing card images."""
+    html = f"""
+    <!doctype html>
+    <html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Trading Card Gallery</title>
+        <style>
+            :root {{ color-scheme: light dark; }}
+            * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                background: #0b0c10;
+                color: #e5e7eb;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }}
+            header {{
+                position: sticky;
+                top: 0;
+                z-index: 10;
+                background: rgba(15, 17, 26, 0.9);
+                backdrop-filter: blur(6px);
+                border-bottom: 1px solid #1f2937;
+                padding: 12px 16px;
+                display: flex;
+                gap: 12px;
+                align-items: center;
+            }}
+            h1 {{ font-size: 18px; font-weight: 600; margin-right: auto; }}
+            .tab {{
+                border: 1px solid #1f2937;
+                background: #111827;
+                color: #e5e7eb;
+                padding: 8px 14px;
+                border-radius: 10px;
+                cursor: pointer;
+                transition: all 0.15s ease;
+                text-transform: capitalize;
+            }}
+            .tab:hover {{ border-color: #2563eb; color: #bfdbfe; }}
+            .tab.active {{
+                background: linear-gradient(135deg, #2563eb, #9333ea);
+                border-color: transparent;
+                color: white;
+                box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35);
+            }}
+            .status {{
+                margin-left: 8px;
+                font-size: 13px;
+                color: #9ca3af;
+            }}
+            main {{
+                flex: 1;
+                overflow-y: auto;
+                padding: 18px;
+            }}
+            .grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+                gap: 16px;
+            }}
+            .card {{
+                background: #0f172a;
+                border: 1px solid #1f2937;
+                border-radius: 12px;
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+                transition: transform 0.12s ease, box-shadow 0.12s ease;
+            }}
+            .card:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 14px 36px rgba(0,0,0,0.45);
+            }}
+            .thumb {{
+                background: #0b1220;
+                padding: 8px;
+                display: grid;
+                place-items: center;
+                min-height: 240px;
+            }}
+            .thumb img {{
+                width: 100%;
+                height: 100%;
+                object-fit: contain;
+                border-radius: 8px;
+                background: #111827;
+            }}
+            .meta {{
+                padding: 12px;
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }}
+            .name {{ font-weight: 600; color: #e5e7eb; font-size: 14px; }}
+            .details {{ color: #9ca3af; font-size: 12px; }}
+            @media (max-width: 640px) {{
+                header {{ flex-wrap: wrap; gap: 8px; }}
+                h1 {{ width: 100%; margin-bottom: 6px; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <header>
+            <h1>Card Gallery</h1>
+            <button class="tab active" data-category="raw">Raw</button>
+            <button class="tab" data-category="processed">Processed</button>
+            <button class="tab" data-category="segmented">Segmented</button>
+            <div class="status" id="status"></div>
+        </header>
+        <main>
+            <div class="grid" id="grid"></div>
+        </main>
+        <script>
+            const refreshSeconds = {GALLERY_REFRESH_SECONDS};
+            let currentCategory = "raw";
+            const gridEl = document.getElementById("grid");
+            const statusEl = document.getElementById("status");
+
+            function formatBytes(bytes) {{
+                if (!bytes) return "0 KB";
+                const kb = bytes / 1024;
+                if (kb < 1024) return `${{Math.round(kb)}} KB`;
+                return `${{(kb / 1024).toFixed(2)}} MB`;
+            }}
+
+            async function loadGallery(category) {{
+                currentCategory = category;
+                document.querySelectorAll(".tab").forEach((btn) => {{
+                    btn.classList.toggle("active", btn.dataset.category === category);
+                }});
+                statusEl.textContent = "Loading...";
+                try {{
+                    const response = await fetch(`/gallery/images?category=${{encodeURIComponent(category)}}`, {{ cache: "no-store" }});
+                    if (!response.ok) throw new Error(`Request failed: ${{response.status}}`);
+                    const payload = await response.json();
+                    const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
+                    gridEl.innerHTML = blobs.map((blob) => `
+                        <article class="card">
+                            <div class="thumb">
+                                <img loading="lazy" src="${{blob.url}}" alt="${{blob.name}}" />
+                            </div>
+                            <div class="meta">
+                                <div class="name" title="${{blob.name}}">${{blob.name}}</div>
+                                <div class="details">${{formatBytes(blob.size)}} • ${{blob.last_modified || ""}}</div>
+                            </div>
+                        </article>
+                    `).join("");
+                    statusEl.textContent = `${{blobs.length}} image(s) • Updated ${{new Date().toLocaleTimeString()}}`;
+                }} catch (err) {{
+                    console.error(err);
+                    statusEl.textContent = `Error: ${{err.message}}`;
+                }}
+            }}
+
+            document.querySelectorAll(".tab").forEach((btn) => {{
+                btn.addEventListener("click", () => loadGallery(btn.dataset.category));
+            }});
+
+            loadGallery(currentCategory);
+            setInterval(() => loadGallery(currentCategory), refreshSeconds * 1000);
+        </script>
+    </body>
+    </html>
+    """
+    return func.HttpResponse(html, status_code=200, mimetype="text/html")
 
 
 @app.function_name(name="Health")
