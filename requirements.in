@@ -3,5 +3,7 @@ azure-storage-blob
 opencv-python
 numpy
 Pillow
+ultralytics
+huggingface-hub
 pytest
 pytest-cov

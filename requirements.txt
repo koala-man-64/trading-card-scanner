@@ -56,6 +56,10 @@ pytest==8.4.2
     #   pytest-cov
 pytest-cov==7.0.0
     # via -r requirements.in
+huggingface-hub==0.26.2
+    # via -r requirements.in
+ultralytics==8.3.73
+    # via -r requirements.in
 requests==2.32.5
     # via azure-core
 tomli==2.3.0

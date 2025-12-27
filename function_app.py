@@ -1,4 +1,5 @@
 import io
+import base64
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import azure.functions as func
 from azure.storage.blob import BlobServiceClient, ContainerClient
 
 from CardProcessor import process_utils
+from CardProcessor.layout_analysis import analyze_layout_from_image_bytes
 
 app = func.FunctionApp()
 
@@ -150,6 +152,72 @@ def _sanitize_zip_member_name(value: str) -> str:
 def health(req: func.HttpRequest) -> func.HttpResponse:
     """Simple health endpoint for Postman/smoke tests."""
     return func.HttpResponse("OK", status_code=200)
+
+
+def _parse_bool_param(value: Optional[str], *, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@app.function_name(name="AnalyzeLayout")
+@app.route(route="layout", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
+    """Run document layout analysis on uploaded image bytes."""
+    image_bytes = req.get_body() or b""
+    if not image_bytes:
+        return func.HttpResponse(
+            "Provide image bytes in the request body.", status_code=400
+        )
+
+    model_variant = (req.params.get("model_variant") or "nano").strip().lower()
+    imgsz = int(req.params.get("imgsz") or 1280)
+    conf = float(req.params.get("conf") or 0.25)
+    iou = float(req.params.get("iou") or 0.5)
+    extract_crops = _parse_bool_param(req.params.get("extract_crops"), default=True)
+    crop_format = (req.params.get("crop_format") or "png").strip().lower()
+
+    result = analyze_layout_from_image_bytes(
+        image_bytes,
+        model_variant=model_variant,
+        imgsz=imgsz,
+        conf=conf,
+        iou=iou,
+        extract_crops=extract_crops,
+        crop_format=crop_format,
+    )
+
+    def _serialize_element(idx, el):
+        payload = {
+            "index": idx,
+            "label": el.label,
+            "confidence": el.confidence,
+            "bbox_xyxy": el.bbox_xyxy,
+            "bbox_norm": el.bbox_norm,
+            "reading_order_hint": el.reading_order_hint,
+        }
+        if el.crop_bytes is not None:
+            payload["crop"] = {
+                "mime": el.crop_mime,
+                "data": base64.b64encode(el.crop_bytes).decode("utf-8"),
+            }
+        return payload
+
+    body = {
+        "image_width": result.image_width,
+        "image_height": result.image_height,
+        "elements": [
+            _serialize_element(idx, el) for idx, el in enumerate(result.elements, 1)
+        ],
+        "model_info": result.model_info,
+        "errors": result.errors,
+    }
+    status_code = 200 if not result.errors else 207
+    return func.HttpResponse(
+        body=json.dumps(body),
+        status_code=status_code,
+        mimetype="application/json",
+    )
 
 
 @app.function_name(name="ProcessImage")
