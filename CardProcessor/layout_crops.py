@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from PIL import Image
 
@@ -19,7 +19,7 @@ def encode_image_bytes(
     img: Image.Image, *, format: str = "png", quality: int = 90
 ) -> Tuple[bytes, str]:
     buf = BytesIO()
-    save_kwargs: dict[str, object] = {"format": format.upper()}
+    save_kwargs: Dict[str, Any] = {"format": format.upper()}
     if format.lower() == "jpeg":
         save_kwargs["quality"] = quality
         save_kwargs["optimize"] = True
