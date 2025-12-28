@@ -6,20 +6,25 @@ import os
 import re
 import uuid
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, Union
+from urllib.parse import urlencode
 
 import azure.functions as func
+from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import (
-    BlobSasPermissions,
     BlobServiceClient,
     ContainerClient,
-    generate_blob_sas,
 )
 
 from CardProcessor import process_utils
 from CardProcessor.layout_analysis import analyze_layout_from_image_bytes
+
+try:
+    from azure.identity import DefaultAzureCredential
+except ImportError:
+    DefaultAzureCredential = None  # type: ignore
 
 app = func.FunctionApp()
 
@@ -29,10 +34,39 @@ INPUT_CONTAINER_NAME = os.environ.get("INPUT_CONTAINER_NAME", "input")
 GALLERY_CONTAINER_NAME = os.environ.get(
     "GALLERY_CONTAINER_NAME", PROCESSED_CONTAINER_NAME
 )
-GALLERY_RAW_PREFIX = os.environ.get("GALLERY_RAW_PREFIX", "raw")
+GALLERY_INPUT_PREFIX = os.environ.get("GALLERY_INPUT_PREFIX", "input")
 GALLERY_PROCESSED_PREFIX = os.environ.get("GALLERY_PROCESSED_PREFIX", "processed")
 GALLERY_SEGMENTED_PREFIX = os.environ.get("GALLERY_SEGMENTED_PREFIX", "segmented")
 GALLERY_REFRESH_SECONDS = float(os.environ.get("GALLERY_REFRESH_SECONDS", "12000"))
+GALLERY_USE_PUBLIC_URLS = (
+    os.environ.get("GALLERY_USE_PUBLIC_URLS", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+STORAGE_AUTH_MODE = (
+    os.environ.get("STORAGE_AUTH_MODE", "connection_string").strip().lower()
+)
+STORAGE_ACCOUNT_URL = os.environ.get("STORAGE_ACCOUNT_URL")
+
+
+def _resolve_auth_level(value: Optional[str], default: func.AuthLevel) -> func.AuthLevel:
+    if not value:
+        return default
+    normalized = value.strip().upper()
+    if normalized in {"ANONYMOUS", "FUNCTION", "ADMIN"}:
+        return getattr(func.AuthLevel, normalized)
+    logging.warning("Unknown auth level '%s'; defaulting to %s", value, default)
+    return default
+
+
+DEFAULT_AUTH_LEVEL = _resolve_auth_level(
+    os.environ.get("HTTP_AUTH_LEVEL"), func.AuthLevel.FUNCTION
+)
+GALLERY_AUTH_LEVEL = _resolve_auth_level(
+    os.environ.get("GALLERY_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
+)
+HEALTH_AUTH_LEVEL = _resolve_auth_level(
+    os.environ.get("HEALTH_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
+)
 
 
 def _get_storage_clients() -> Tuple[
@@ -54,6 +88,26 @@ def _get_storage_clients() -> Tuple[
 
 
 def _get_storage_service_client() -> Optional[BlobServiceClient]:
+    if STORAGE_AUTH_MODE in {"managed_identity", "aad"}:
+        if not STORAGE_ACCOUNT_URL:
+            logging.error(
+                "STORAGE_ACCOUNT_URL is required for managed identity storage access"
+            )
+            return None
+        if DefaultAzureCredential is None:
+            logging.error("azure-identity is not installed; cannot use managed identity")
+            return None
+        try:
+            credential = DefaultAzureCredential()
+            return BlobServiceClient(
+                account_url=STORAGE_ACCOUNT_URL, credential=credential
+            )
+        except Exception as exc:
+            logging.error(
+                "Failed to create blob service client with managed identity: %s", exc
+            )
+            return None
+
     connection = os.environ.get("AzureWebJobsStorage")
     if not connection:
         logging.error("AzureWebJobsStorage connection string not found in environment")
@@ -85,43 +139,35 @@ def _get_container_client(
         return None, None
 
 
-def _extract_account_key(connection: Optional[str]) -> Optional[str]:
-    if not connection:
-        return None
-
-    for part in connection.split(";"):
-        if part.lower().startswith("accountkey="):
-            return part.split("=", 1)[1]
-    return None
-
-
 def _normalize_prefix(prefix: str) -> str:
     cleaned = prefix.strip().strip("/")
     return f"{cleaned}/" if cleaned else ""
 
 
-def _build_blob_url(
-    container_client: ContainerClient, blob_name: str, account_key: Optional[str]
+def _build_gallery_image_url(
+    container_client: ContainerClient,
+    blob_name: str,
+    *,
+    category: str,
+    auth_code: Optional[str],
+    use_public_urls: bool,
 ) -> str:
-    blob_client = container_client.get_blob_client(blob_name)
-    base_url = blob_client.url
+    if use_public_urls:
+        return container_client.get_blob_client(blob_name).url
 
-    if not account_key:
-        return base_url
-
-    sas_token = generate_blob_sas(
-        account_name=container_client.account_name,
-        container_name=container_client.container_name,
-        blob_name=blob_name,
-        account_key=account_key,
-        permission=BlobSasPermissions(read=True),
-        expiry=datetime.now(timezone.utc) + timedelta(hours=1),
-    )
-    return f"{base_url}?{sas_token}"
+    params = {"name": blob_name, "category": category}
+    if auth_code:
+        params["code"] = auth_code
+    return f"/api/gallery/image?{urlencode(params)}"
 
 
 def _list_blob_images(
-    container_client: ContainerClient, prefix: str, account_key: Optional[str]
+    container_client: ContainerClient,
+    prefix: str,
+    *,
+    category: str,
+    auth_code: Optional[str],
+    use_public_urls: bool,
 ) -> List[Dict[str, object]]:
     blobs = []
     normalized_prefix = _normalize_prefix(prefix)
@@ -136,7 +182,13 @@ def _list_blob_images(
                 "name": blob.name,
                 "size": blob.size or 0,
                 "last_modified": last_modified,
-                "url": _build_blob_url(container_client, blob.name, account_key),
+                "url": _build_gallery_image_url(
+                    container_client,
+                    blob.name,
+                    category=category,
+                    auth_code=auth_code,
+                    use_public_urls=use_public_urls,
+                ),
             }
         )
     return blobs
@@ -249,36 +301,48 @@ def _sanitize_zip_member_name(value: str) -> str:
 
 def _gallery_prefix_for_category(category: str) -> Optional[str]:
     normalized = category.strip().lower()
-    if normalized == "raw":
-        return GALLERY_RAW_PREFIX
+    if normalized == "input":
+        return GALLERY_INPUT_PREFIX
     if normalized == "processed":
-        return GALLERY_PROCESSED_PREFIX
+        prefix = (GALLERY_PROCESSED_PREFIX or "").strip()
+        if prefix.lower() in {"", "root", "all", "*"}:
+            return ""
+        container_name = (GALLERY_CONTAINER_NAME or "").strip().lower()
+        if prefix.strip("/").lower() == container_name:
+            return ""
+        return prefix
     if normalized == "segmented":
         return GALLERY_SEGMENTED_PREFIX
     return None
 
 
 @app.function_name(name="GalleryImages")
-@app.route(route="gallery/images", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="gallery/images", methods=["GET"], auth_level=GALLERY_AUTH_LEVEL)
 def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
     """Return JSON listing of blobs for the requested gallery category."""
     category = (req.params.get("category") or "processed").strip().lower()
     prefix = _gallery_prefix_for_category(category)
     if prefix is None:
         return func.HttpResponse(
-            "Unsupported category. Use raw, processed, or segmented.",
+            "Unsupported category. Use input, processed, or segmented.",
             status_code=400,
         )
 
-    service_client, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
+    _, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
     if not container_client:
         return func.HttpResponse(
             "Storage is not configured. Set AzureWebJobsStorage.", status_code=500
         )
 
-    account_key = _extract_account_key(os.environ.get("AzureWebJobsStorage"))
+    auth_code = req.params.get("code")
     try:
-        blobs = _list_blob_images(container_client, prefix, account_key)
+        blobs = _list_blob_images(
+            container_client,
+            prefix,
+            category=category,
+            auth_code=auth_code,
+            use_public_urls=GALLERY_USE_PUBLIC_URLS,
+        )
     except Exception as exc:
         logging.error("Failed to list blobs for gallery: %s", exc)
         return func.HttpResponse("Failed to list images.", status_code=500)
@@ -297,7 +361,7 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.function_name(name="GalleryPage")
-@app.route(route="gallery", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="gallery", methods=["GET"], auth_level=GALLERY_AUTH_LEVEL)
 def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
     """Serve a minimal gallery UI for browsing card images."""
     html = f"""
@@ -387,7 +451,7 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
             }}
             .grid {{
                 display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+                grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
                 gap: 16px;
             }}
             .card {{
@@ -406,15 +470,16 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
             }}
             .thumb {{
                 background: #0b1220;
-                padding: 8px;
+                padding: 6px;
                 display: grid;
                 place-items: center;
-                min-height: 240px;
+                height: 140px;
             }}
             .thumb img {{
                 width: 100%;
                 height: 100%;
-                object-fit: contain;
+                object-fit: cover;
+                object-position: center;
                 border-radius: 8px;
                 background: #111827;
             }}
@@ -443,7 +508,7 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
     <body>
         <header>
             <h1>Card Gallery</h1>
-            <button class="tab" data-category="raw">Raw</button>
+            <button class="tab" data-category="input">Input</button>
             <button class="tab" data-category="processed">Processed</button>
             <button class="tab" data-category="segmented">Segmented</button>
             <div class="status" id="status"></div>
@@ -454,6 +519,8 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
         <script>
             const refreshSeconds = {GALLERY_REFRESH_SECONDS};
             const defaultCategory = "processed";
+            const urlParams = new URLSearchParams(window.location.search);
+            const authCode = urlParams.get("code");
             let currentCategory = defaultCategory;
             const galleryEl = document.getElementById("gallery");
             const statusEl = document.getElementById("status");
@@ -527,12 +594,24 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
                 }}).join("");
             }}
 
+            function buildApiUrl(path, params) {{
+                const query = new URLSearchParams(params);
+                if (authCode) {{
+                    query.set("code", authCode);
+                }}
+                const qs = query.toString();
+                return qs ? `${{path}}?${{qs}}` : path;
+            }}
+
             async function loadGallery(category) {{
                 currentCategory = category;
                 setActiveTab(category);
                 statusEl.textContent = "Loading...";
                 try {{
-                    const response = await fetch(`/api/gallery/images?category=${{encodeURIComponent(category)}}`, {{ cache: "no-store" }});
+                    const response = await fetch(
+                        buildApiUrl("/api/gallery/images", {{ category }}),
+                        {{ cache: "no-store" }}
+                    );
                     if (!response.ok) throw new Error(`Request failed: ${{response.status}}`);
                     const payload = await response.json();
                     const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
@@ -558,8 +637,55 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(html, status_code=200, mimetype="text/html")
 
 
+@app.function_name(name="GalleryImage")
+@app.route(route="gallery/image", methods=["GET"], auth_level=GALLERY_AUTH_LEVEL)
+def gallery_image(req: func.HttpRequest) -> func.HttpResponse:
+    """Serve a single blob image for gallery browsing."""
+    name = (req.params.get("name") or "").strip()
+    if not name:
+        return func.HttpResponse("Missing blob name.", status_code=400)
+
+    category = (req.params.get("category") or "processed").strip().lower()
+    prefix = _gallery_prefix_for_category(category)
+    if prefix is None:
+        return func.HttpResponse(
+            "Unsupported category. Use input, processed, or segmented.",
+            status_code=400,
+        )
+
+    normalized_prefix = _normalize_prefix(prefix)
+    if normalized_prefix and not name.startswith(normalized_prefix):
+        return func.HttpResponse(
+            "Blob name does not match category prefix.", status_code=400
+        )
+
+    _, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
+    if not container_client:
+        return func.HttpResponse(
+            "Storage is not configured. Set AzureWebJobsStorage.", status_code=500
+        )
+
+    blob_client = container_client.get_blob_client(name)
+    try:
+        props = blob_client.get_blob_properties()
+        content_type = (
+            props.content_settings.content_type or "application/octet-stream"
+        )
+        data = blob_client.download_blob().readall()
+    except ResourceNotFoundError:
+        return func.HttpResponse("Blob not found.", status_code=404)
+    except Exception as exc:
+        logging.error("Failed to download blob %s: %s", name, exc)
+        return func.HttpResponse("Failed to download image.", status_code=500)
+
+    headers = {"Cache-Control": "public, max-age=60"}
+    return func.HttpResponse(
+        body=data, status_code=200, mimetype=content_type, headers=headers
+    )
+
+
 @app.function_name(name="Health")
-@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="health", methods=["GET"], auth_level=HEALTH_AUTH_LEVEL)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     """Simple health endpoint for Postman/smoke tests."""
     return func.HttpResponse("OK", status_code=200)
@@ -572,7 +698,7 @@ def _parse_bool_param(value: Optional[str], *, default: bool) -> bool:
 
 
 @app.function_name(name="AnalyzeLayout")
-@app.route(route="layout", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="layout", methods=["POST"], auth_level=DEFAULT_AUTH_LEVEL)
 def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
     """Run document layout analysis on uploaded image bytes."""
     image_bytes = req.get_body() or b""
@@ -632,7 +758,7 @@ def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.function_name(name="ProcessImage")
-@app.route(route="process", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="process", methods=["POST"], auth_level=DEFAULT_AUTH_LEVEL)
 def process_image(req: func.HttpRequest) -> func.HttpResponse:
     """Process an uploaded image and optionally return/upload detected card crops.
 
