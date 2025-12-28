@@ -371,147 +371,243 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Trading Card Gallery</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
         <style>
-            :root {{ color-scheme: light dark; }}
+            :root {{
+                color-scheme: light;
+                --bg: #f8f7f3;
+                --bg-wash: #eef3f2;
+                --surface: #ffffff;
+                --surface-muted: #f7f8fa;
+                --border: #e5e7eb;
+                --border-soft: #edeff2;
+                --text: #1f2933;
+                --muted: #6b7280;
+                --accent: #0f766e;
+                --accent-soft: #e4f3f1;
+                --shadow-sm: 0 10px 25px rgba(15, 23, 42, 0.06);
+                --shadow-xs: 0 4px 12px rgba(15, 23, 42, 0.05);
+            }}
             * {{ box-sizing: border-box; margin: 0; padding: 0; }}
             body {{
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                background: #0b0c10;
-                color: #e5e7eb;
+                font-family: "Work Sans", "Helvetica Neue", sans-serif;
+                background:
+                    radial-gradient(1200px 700px at 12% -10%, #fff9eb 0%, transparent 60%),
+                    radial-gradient(900px 600px at 95% 0%, #e6f2f1 0%, transparent 55%),
+                    linear-gradient(180deg, #f8f7f3 0%, #eef2f7 100%);
+                color: var(--text);
                 min-height: 100vh;
                 display: flex;
                 flex-direction: column;
+                line-height: 1.5;
             }}
             header {{
                 position: sticky;
                 top: 0;
                 z-index: 10;
-                background: rgba(15, 17, 26, 0.9);
-                backdrop-filter: blur(6px);
-                border-bottom: 1px solid #1f2937;
-                padding: 12px 16px;
+                background: rgba(250, 249, 246, 0.92);
+                backdrop-filter: blur(8px);
+                border-bottom: 1px solid var(--border);
+                padding: 16px 20px;
                 display: flex;
                 gap: 12px;
                 align-items: center;
             }}
-            h1 {{ font-size: 18px; font-weight: 600; margin-right: auto; }}
-            .tab {{
-                border: 1px solid #1f2937;
-                background: #111827;
-                color: #e5e7eb;
-                padding: 8px 14px;
-                border-radius: 10px;
-                cursor: pointer;
-                transition: all 0.15s ease;
-                text-transform: capitalize;
+            .header-left {{
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
             }}
-            .tab:hover {{ border-color: #2563eb; color: #bfdbfe; }}
-            .tab.active {{
-                background: linear-gradient(135deg, #2563eb, #9333ea);
-                border-color: transparent;
-                color: white;
-                box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35);
+            h1 {{
+                font-family: "Fraunces", "Iowan Old Style", serif;
+                font-size: 20px;
+                font-weight: 700;
+                letter-spacing: 0.2px;
             }}
             .status {{
-                margin-left: 8px;
+                font-size: 12px;
+                color: var(--muted);
+            }}
+            .status.error {{
+                color: #b45309;
+            }}
+            .header-right {{
+                margin-left: auto;
+            }}
+            .tabs {{
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                padding: 4px;
+                border-radius: 999px;
+                background: var(--surface);
+                border: 1px solid var(--border);
+                box-shadow: var(--shadow-xs);
+            }}
+            .tab {{
+                border: 0;
+                background: transparent;
+                color: var(--muted);
+                padding: 6px 14px;
+                border-radius: 999px;
+                cursor: pointer;
+                transition: background 0.15s ease, color 0.15s ease;
                 font-size: 13px;
-                color: #9ca3af;
+                font-weight: 500;
+                font-family: inherit;
+            }}
+            .tab:hover {{
+                color: var(--text);
+            }}
+            .tab.active {{
+                background: var(--accent-soft);
+                color: var(--accent);
+                font-weight: 600;
+            }}
+            .tab:focus-visible {{
+                outline: 2px solid var(--accent);
+                outline-offset: 2px;
             }}
             main {{
                 flex: 1;
                 overflow-y: auto;
-                padding: 18px;
+                padding: 24px 20px 48px;
+                width: 100%;
+                max-width: 1280px;
+                margin: 0 auto;
             }}
             .gallery {{
                 display: flex;
                 flex-direction: column;
-                gap: 16px;
+                gap: 24px;
             }}
             .folder {{
-                background: #0f1628;
-                border: 1px solid #1f2937;
-                border-radius: 12px;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: 16px;
+                box-shadow: var(--shadow-sm);
                 overflow: hidden;
             }}
             .folder-header {{
-                padding: 12px;
+                padding: 14px 18px;
                 display: flex;
                 align-items: baseline;
                 gap: 8px;
+                border-bottom: 1px solid var(--border-soft);
             }}
             .folder-title {{
-                font-size: 15px;
+                font-size: 14px;
                 font-weight: 600;
-                color: #e5e7eb;
             }}
             .folder-count {{
-                color: #9ca3af;
+                color: var(--muted);
                 font-size: 12px;
             }}
             .grid {{
                 display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-                gap: 16px;
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 18px;
+                padding: 18px;
             }}
             .card {{
-                background: #0f172a;
-                border: 1px solid #1f2937;
-                border-radius: 12px;
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: 14px;
                 overflow: hidden;
                 display: flex;
                 flex-direction: column;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-                transition: transform 0.12s ease, box-shadow 0.12s ease;
+                box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+                transition: transform 0.15s ease, box-shadow 0.15s ease;
+                animation: fadeUp 0.35s ease both;
+                animation-delay: calc(var(--stagger, 0) * 35ms);
             }}
             .card:hover {{
                 transform: translateY(-2px);
-                box-shadow: 0 14px 36px rgba(0,0,0,0.45);
+                box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
             }}
             .thumb {{
-                background: #0b1220;
-                padding: 6px;
+                background: var(--surface-muted);
+                padding: 8px;
                 display: grid;
                 place-items: center;
-                height: 140px;
             }}
             .thumb img {{
                 width: 100%;
-                height: 100%;
+                height: auto;
+                aspect-ratio: 3 / 4;
                 object-fit: cover;
                 object-position: center;
-                border-radius: 8px;
-                background: #111827;
+                border-radius: 10px;
+                background: #ffffff;
+                box-shadow: inset 0 0 0 1px var(--border-soft);
             }}
             .meta {{
-                padding: 12px;
+                padding: 12px 14px 14px;
                 display: flex;
                 flex-direction: column;
                 gap: 6px;
             }}
             .empty {{
                 text-align: center;
-                padding: 20px;
-                border: 1px dashed #1f2937;
-                border-radius: 12px;
-                color: #9ca3af;
-                background: #0f172a;
+                padding: 28px;
+                border: 1px dashed var(--border);
+                border-radius: 16px;
+                color: var(--muted);
+                background: var(--surface);
             }}
-            .name {{ font-weight: 600; color: #e5e7eb; font-size: 14px; }}
-            .details {{ color: #9ca3af; font-size: 12px; }}
-            @media (max-width: 640px) {{
-                header {{ flex-wrap: wrap; gap: 8px; }}
-                h1 {{ width: 100%; margin-bottom: 6px; }}
+            .name {{
+                font-weight: 600;
+                color: var(--text);
+                font-size: 13px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }}
+            .details {{
+                color: var(--muted);
+                font-size: 12px;
+            }}
+            @keyframes fadeUp {{
+                from {{ opacity: 0; transform: translateY(6px); }}
+                to {{ opacity: 1; transform: translateY(0); }}
+            }}
+            @media (max-width: 720px) {{
+                header {{
+                    flex-direction: column;
+                    align-items: flex-start;
+                    gap: 10px;
+                }}
+                .header-right {{
+                    width: 100%;
+                }}
+                .tabs {{
+                    width: 100%;
+                    justify-content: space-between;
+                }}
+            }}
+            @media (prefers-reduced-motion: reduce) {{
+                * {{
+                    animation: none !important;
+                    transition: none !important;
+                }}
             }}
         </style>
     </head>
     <body>
         <header>
-            <h1>Card Gallery</h1>
-            <button class="tab" data-category="input">Input</button>
-            <button class="tab" data-category="processed">Processed</button>
-            <button class="tab" data-category="segmented">Segmented</button>
-            <div class="status" id="status"></div>
+            <div class="header-left">
+                <h1>Card Gallery</h1>
+                <div class="status" id="status" aria-live="polite"></div>
+            </div>
+            <div class="header-right">
+                <div class="tabs" role="tablist" aria-label="Gallery categories">
+                    <button class="tab" data-category="input" role="tab" aria-selected="false">Input</button>
+                    <button class="tab" data-category="processed" role="tab" aria-selected="false">Processed</button>
+                    <button class="tab" data-category="segmented" role="tab" aria-selected="false">Segmented</button>
+                </div>
+            </div>
         </header>
         <main>
             <div class="gallery" id="gallery"></div>
@@ -526,15 +622,25 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
             const statusEl = document.getElementById("status");
 
             function formatBytes(bytes) {{
-                if (!bytes) return "0 KB";
+                if (!bytes) return "0 B";
+                if (bytes < 1024) return `${{bytes}} B`;
                 const kb = bytes / 1024;
                 if (kb < 1024) return `${{Math.round(kb)}} KB`;
                 return `${{(kb / 1024).toFixed(2)}} MB`;
             }}
 
+            function formatDate(value) {{
+                if (!value) return "";
+                const parsed = new Date(value);
+                if (Number.isNaN(parsed.getTime())) return value;
+                return parsed.toLocaleString();
+            }}
+
             function setActiveTab(category) {{
                 document.querySelectorAll(".tab").forEach((btn) => {{
-                    btn.classList.toggle("active", btn.dataset.category === category);
+                    const isActive = btn.dataset.category === category;
+                    btn.classList.toggle("active", isActive);
+                    btn.setAttribute("aria-selected", isActive ? "true" : "false");
                 }});
             }}
 
@@ -563,27 +669,47 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
                 }}));
             }}
 
-            function renderFolders(groups) {{
+            function formatFolderName(folder) {{
+                return folder === "root" ? "Root" : folder;
+            }}
+
+            function formatDisplayName(blob, prefix) {{
+                const relativeName = normalizeRelativeName(blob.name || "", prefix);
+                const parts = relativeName.split("/").filter(Boolean);
+                const shortName = parts.length ? parts[parts.length - 1] : relativeName;
+                return {{
+                    shortName,
+                    fullName: relativeName || blob.name || "",
+                }};
+            }}
+
+            function renderFolders(groups, prefix) {{
                 if (!groups.length) {{
-                    return `<div class="empty">No images found for this category.</div>`;
+                    return `<div class="empty">No images yet for this category.</div>`;
                 }}
 
                 return groups.map((group) => {{
-                    const cards = group.items.map((blob) => `
-                        <article class="card">
-                            <div class="thumb">
-                                <img loading="lazy" src="${{blob.url}}" alt="${{blob.name}}" />
-                            </div>
-                            <div class="meta">
-                                <div class="name" title="${{blob.name}}">${{blob.name}}</div>
-                                <div class="details">${{formatBytes(blob.size)}} • ${{blob.last_modified || ""}}</div>
-                            </div>
-                        </article>
-                    `).join("");
+                    const folderName = formatFolderName(group.folder);
+                    const cards = group.items.map((blob, index) => {{
+                        const nameInfo = formatDisplayName(blob, prefix);
+                        const dateLabel = formatDate(blob.last_modified);
+                        const details = [formatBytes(blob.size), dateLabel].filter(Boolean).join(" | ");
+                        return `
+                            <article class="card" style="--stagger: ${{index}}">
+                                <div class="thumb">
+                                    <img loading="lazy" decoding="async" src="${{blob.url}}" alt="${{nameInfo.fullName}}" />
+                                </div>
+                                <div class="meta">
+                                    <div class="name" title="${{nameInfo.fullName}}">${{nameInfo.shortName}}</div>
+                                    <div class="details">${{details}}</div>
+                                </div>
+                            </article>
+                        `;
+                    }}).join("");
                     return `
                         <section class="folder">
                             <div class="folder-header">
-                                <div class="folder-title" title="${{group.folder}}">${{group.folder}}</div>
+                                <div class="folder-title" title="${{group.folder}}">${{folderName}}</div>
                                 <div class="folder-count">${{group.items.length}} image(s)</div>
                             </div>
                             <div class="grid">
@@ -606,7 +732,9 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
             async function loadGallery(category) {{
                 currentCategory = category;
                 setActiveTab(category);
-                statusEl.textContent = "Loading...";
+                statusEl.classList.remove("error");
+                statusEl.textContent = "Loading images...";
+                galleryEl.innerHTML = `<div class="empty">Loading images...</div>`;
                 try {{
                     const response = await fetch(
                         buildApiUrl("/api/gallery/images", {{ category }}),
@@ -616,11 +744,13 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
                     const payload = await response.json();
                     const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
                     const groups = groupByFolder(blobs, payload.prefix || "");
-                    galleryEl.innerHTML = renderFolders(groups);
-                    statusEl.textContent = `${{blobs.length}} image(s) across ${{groups.length}} folder(s) • Updated ${{new Date().toLocaleTimeString()}}`;
+                    galleryEl.innerHTML = renderFolders(groups, payload.prefix || "");
+                    statusEl.textContent = `${{blobs.length}} image(s) in ${{groups.length}} folder(s) | Updated ${{new Date().toLocaleTimeString()}}`;
                 }} catch (err) {{
                     console.error(err);
+                    statusEl.classList.add("error");
                     statusEl.textContent = `Error: ${{err.message}}`;
+                    galleryEl.innerHTML = `<div class="empty">We couldn't load images. Try again shortly.</div>`;
                 }}
             }}
 
