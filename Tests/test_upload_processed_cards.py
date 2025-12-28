@@ -16,13 +16,13 @@ Environment knobs for integration tests:
   - `TEST_OUTPUT_CONTAINER` (default: `processed-tests-output`):
       Container used by `test_upload_processed_cards_writes_blobs_to_storage`.
   - `TEST_CARD_FOLDER` (default: `test-card-folder`):
-      "Folder" prefix used inside the `input` container for parsing-result uploads.
-  - `DELETE_TEST_OUTPUT_CONTAINER` (default: off):
-      When truthy, cleanup runs (delete container or delete uploaded prefix).
+      Base prefix used inside the `input` container for parsing-result uploads.
+      A unique suffix is appended per test run for cleanup safety.
 """
 
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import List, Tuple
 
@@ -58,20 +58,15 @@ def _read_input_sample(name: str) -> bytes:
     return _read_sample(name, INPUT_SAMPLES)
 
 
-def _truthy_env(name: str) -> bool:
-    # Common "truthy" parsing for environment variable toggles.
-    value = (os.environ.get(name) or "").strip().lower()
-    return value in {"1", "true", "yes", "y", "on"}
-
-
 def _output_container_name() -> str:
     # Container name for the processed-card integration upload test.
     return (os.environ.get("TEST_OUTPUT_CONTAINER") or "processed-tests-output").strip()
 
 
-def _should_delete_output_container() -> bool:
-    # Default is off so the container is kept for inspection.
-    return _truthy_env("DELETE_TEST_OUTPUT_CONTAINER")
+def _unique_folder(base: str) -> str:
+    token = uuid.uuid4().hex
+    raw = f"{base}-{token}" if base else f"test-{token}"
+    return function_app._sanitize_blob_folder_name(raw)
 
 
 class _StubContainer:
@@ -111,7 +106,7 @@ def _card_folder_name() -> str:
 
 
 def _delete_prefix(container_client, prefix: str) -> None:
-    # Best-effort delete of blobs under a prefix. Used for optional cleanup.
+    # Best-effort delete of blobs under a prefix.
     failures = []
     for blob in container_client.list_blobs(name_starts_with=prefix):
         try:
@@ -195,16 +190,19 @@ def test_upload_processed_cards_writes_blobs_to_storage(
     service_client = BlobServiceClient.from_connection_string(connection)
     container_name = _output_container_name()
     container_client = service_client.get_container_client(container_name)
-
+    created_container = False
+    folder = _unique_folder("processed-tests")
+    prefix = f"{folder}/"
+    cleanup_prefix: str | None = None
     try:
         try:
             container_client.create_container()
+            created_container = True
+        except ResourceExistsError:
+            pass
         except Exception as exc:
-            # If it already exists, keep going; otherwise skip.
-            if "ContainerAlreadyExists" not in str(exc):
-                pytest.skip(
-                    f"Could not create/get container for integration test: {exc}"
-                )
+            pytest.skip(f"Could not create/get container for integration test: {exc}")
+        cleanup_prefix = prefix
 
         # Upload two images into the output container using the production naming scheme.
         cards = [
@@ -212,25 +210,31 @@ def test_upload_processed_cards_writes_blobs_to_storage(
             ("unknown", _read_output_sample("sample output 2.jpg")),
         ]
         source_path = str(INPUT_SAMPLES / "sample input 1.jpg")
-        _upload_processed_cards(container_client, source_path, cards)
+        _upload_processed_cards(container_client, source_path, cards, folder=folder)
 
         # Verify expected blob names are present.
-        blobs = {blob.name for blob in container_client.list_blobs()}
-        assert {"sample input 1_1.jpg", "sample input 1_2.jpg"} <= blobs
+        blobs = {
+            blob.name for blob in container_client.list_blobs(name_starts_with=prefix)
+        }
+        expected = {f"{prefix}sample input 1_1.jpg", f"{prefix}sample input 1_2.jpg"}
+        assert expected <= blobs
 
         # Verify one blob's content roundtrips correctly.
-        downloaded = container_client.download_blob("sample input 1_1.jpg").readall()
+        downloaded = container_client.download_blob(
+            f"{prefix}sample input 1_1.jpg"
+        ).readall()
         assert downloaded == cards[0][1]
     finally:
-        # Default behavior keeps the container for manual inspection; set
-        # DELETE_TEST_OUTPUT_CONTAINER=1 to clean up.
-        if _should_delete_output_container():
-            try:
-                container_client.delete_container()
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Failed to delete container '{container_name}': {exc}"
-                ) from exc
+        if cleanup_prefix:
+            if created_container:
+                try:
+                    container_client.delete_container()
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Failed to delete container '{container_name}': {exc}"
+                    ) from exc
+            else:
+                _delete_prefix(container_client, cleanup_prefix)
 
 
 @pytest.mark.integration
@@ -244,7 +248,7 @@ def test_upload_parsing_results_to_input_container_under_card_folder(
     # This is useful when you want to visually inspect what parsing produced in
     # Azure Storage: the images end up under:
     #   container: input
-    #   prefix:    <TEST_CARD_FOLDER>/...
+    #   prefix:    <TEST_CARD_FOLDER>-<unique>/...
     connection = get_storage_connection(monkeypatch)
     if not connection:
         pytest.skip(
@@ -253,40 +257,53 @@ def test_upload_parsing_results_to_input_container_under_card_folder(
 
     service_client = BlobServiceClient.from_connection_string(connection)
     input_container = service_client.get_container_client("input")
-    try:
-        input_container.create_container()
-    except ResourceExistsError:
-        logging.info("Container 'input' already exists")
-    except Exception as exc:
-        raise RuntimeError(f"Could not create/get container 'input': {exc}") from exc
-
+    created_container = False
+    cleanup_prefix: str | None = None
     card_folder = _card_folder_name()
-    prefix = f"{card_folder}/"
+    folder = _unique_folder(card_folder)
+    prefix = f"{folder}/"
 
-    # Parse cards from the sample input image.
-    input_bytes = _read_input_sample("sample input 1.jpg")
-    crops = process_utils.extract_card_crops_from_image_bytes(input_bytes)
-    assert crops, "Expected at least one parsed card crop from sample input"
+    try:
+        try:
+            input_container.create_container()
+            created_container = True
+        except ResourceExistsError:
+            logging.info("Container 'input' already exists")
+        except Exception as exc:
+            raise RuntimeError(f"Could not create/get container 'input': {exc}") from exc
+        cleanup_prefix = prefix
+        # Parse cards from the sample input image.
+        input_bytes = _read_input_sample("sample input 1.jpg")
+        crops = process_utils.extract_card_crops_from_image_bytes(input_bytes)
+        assert crops, "Expected at least one parsed card crop from sample input"
 
-    # Upload a small subset (first 3) to keep the test fast and the container tidy.
-    uploads = []
-    for idx, (name, img_bytes) in enumerate(crops[:3], 1):
-        # Reuse the same naming helper as the app so blob names mirror production outputs.
-        file_name = function_app._build_processed_card_name("sample input 1.jpg", idx)
-        blob_name = f"{prefix}{file_name}"
-        input_container.upload_blob(name=blob_name, data=img_bytes, overwrite=True)
-        uploads.append((blob_name, img_bytes))
+        # Upload a small subset (first 3) to keep the test fast and the container tidy.
+        uploads = []
+        for idx, (name, img_bytes) in enumerate(crops[:3], 1):
+            # Reuse the same naming helper as the app so blob names mirror production outputs.
+            file_name = function_app._build_processed_card_name("sample input 1.jpg", idx)
+            blob_name = f"{prefix}{file_name}"
+            input_container.upload_blob(name=blob_name, data=img_bytes, overwrite=True)
+            uploads.append((blob_name, img_bytes))
 
-    # Validate that the expected blob names exist under the prefix.
-    existing = {
-        blob.name for blob in input_container.list_blobs(name_starts_with=prefix)
-    }
-    assert {name for name, _ in uploads} <= existing
+        # Validate that the expected blob names exist under the prefix.
+        existing = {
+            blob.name for blob in input_container.list_blobs(name_starts_with=prefix)
+        }
+        assert {name for name, _ in uploads} <= existing
 
-    # Validate that at least one blob roundtrips correctly.
-    check_name, check_bytes = uploads[0]
-    downloaded = input_container.download_blob(check_name).readall()
-    assert downloaded == check_bytes
-    # Optional cleanup for repeated runs.
-    if _should_delete_output_container():
-        _delete_prefix(input_container, prefix)
+        # Validate that at least one blob roundtrips correctly.
+        check_name, check_bytes = uploads[0]
+        downloaded = input_container.download_blob(check_name).readall()
+        assert downloaded == check_bytes
+    finally:
+        if cleanup_prefix:
+            if created_container:
+                try:
+                    input_container.delete_container()
+                except Exception as exc:
+                    raise RuntimeError(
+                        "Failed to delete container 'input' created by test."
+                    ) from exc
+            else:
+                _delete_prefix(input_container, cleanup_prefix)
