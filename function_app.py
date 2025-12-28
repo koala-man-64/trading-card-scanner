@@ -355,6 +355,33 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
                 overflow-y: auto;
                 padding: 18px;
             }}
+            .gallery {{
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+            }}
+            .folder {{
+                background: #0f1628;
+                border: 1px solid #1f2937;
+                border-radius: 12px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+                overflow: hidden;
+            }}
+            .folder-header {{
+                padding: 12px;
+                display: flex;
+                align-items: baseline;
+                gap: 8px;
+            }}
+            .folder-title {{
+                font-size: 15px;
+                font-weight: 600;
+                color: #e5e7eb;
+            }}
+            .folder-count {{
+                color: #9ca3af;
+                font-size: 12px;
+            }}
             .grid {{
                 display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -394,6 +421,14 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
                 flex-direction: column;
                 gap: 6px;
             }}
+            .empty {{
+                text-align: center;
+                padding: 20px;
+                border: 1px dashed #1f2937;
+                border-radius: 12px;
+                color: #9ca3af;
+                background: #0f172a;
+            }}
             .name {{ font-weight: 600; color: #e5e7eb; font-size: 14px; }}
             .details {{ color: #9ca3af; font-size: 12px; }}
             @media (max-width: 640px) {{
@@ -405,18 +440,19 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
     <body>
         <header>
             <h1>Card Gallery</h1>
-            <button class="tab active" data-category="raw">Raw</button>
+            <button class="tab" data-category="raw">Raw</button>
             <button class="tab" data-category="processed">Processed</button>
             <button class="tab" data-category="segmented">Segmented</button>
             <div class="status" id="status"></div>
         </header>
         <main>
-            <div class="grid" id="grid"></div>
+            <div class="gallery" id="gallery"></div>
         </main>
         <script>
             const refreshSeconds = {GALLERY_REFRESH_SECONDS};
-            let currentCategory = "raw";
-            const gridEl = document.getElementById("grid");
+            const defaultCategory = "processed";
+            let currentCategory = defaultCategory;
+            const galleryEl = document.getElementById("gallery");
             const statusEl = document.getElementById("status");
 
             function formatBytes(bytes) {{
@@ -426,18 +462,44 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
                 return `${{(kb / 1024).toFixed(2)}} MB`;
             }}
 
-            async function loadGallery(category) {{
-                currentCategory = category;
+            function setActiveTab(category) {{
                 document.querySelectorAll(".tab").forEach((btn) => {{
                     btn.classList.toggle("active", btn.dataset.category === category);
                 }});
-                statusEl.textContent = "Loading...";
-                try {{
-                    const response = await fetch(`/gallery/images?category=${{encodeURIComponent(category)}}`, {{ cache: "no-store" }});
-                    if (!response.ok) throw new Error(`Request failed: ${{response.status}}`);
-                    const payload = await response.json();
-                    const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
-                    gridEl.innerHTML = blobs.map((blob) => `
+            }}
+
+            function normalizeRelativeName(name, prefix) {{
+                const normalizedPrefix = prefix || "";
+                if (normalizedPrefix && name.startsWith(normalizedPrefix)) {{
+                    return name.slice(normalizedPrefix.length);
+                }}
+                return name;
+            }}
+
+            function groupByFolder(blobs, prefix) {{
+                const folders = new Map();
+                blobs.forEach((blob) => {{
+                    const relativeName = normalizeRelativeName(blob.name || "", prefix);
+                    const parts = relativeName.split("/").filter(Boolean);
+                    const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : "root";
+                    if (!folders.has(folder)) {{
+                        folders.set(folder, []);
+                    }}
+                    folders.get(folder).push(blob);
+                }});
+                return Array.from(folders.entries()).map(([folder, items]) => ({{
+                    folder,
+                    items,
+                }}));
+            }}
+
+            function renderFolders(groups) {{
+                if (!groups.length) {{
+                    return `<div class="empty">No images found for this category.</div>`;
+                }}
+
+                return groups.map((group) => {{
+                    const cards = group.items.map((blob) => `
                         <article class="card">
                             <div class="thumb">
                                 <img loading="lazy" src="${{blob.url}}" alt="${{blob.name}}" />
@@ -448,7 +510,32 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
                             </div>
                         </article>
                     `).join("");
-                    statusEl.textContent = `${{blobs.length}} image(s) • Updated ${{new Date().toLocaleTimeString()}}`;
+                    return `
+                        <section class="folder">
+                            <div class="folder-header">
+                                <div class="folder-title" title="${{group.folder}}">${{group.folder}}</div>
+                                <div class="folder-count">${{group.items.length}} image(s)</div>
+                            </div>
+                            <div class="grid">
+                                ${{cards}}
+                            </div>
+                        </section>
+                    `;
+                }}).join("");
+            }}
+
+            async function loadGallery(category) {{
+                currentCategory = category;
+                setActiveTab(category);
+                statusEl.textContent = "Loading...";
+                try {{
+                    const response = await fetch(`/gallery/images?category=${{encodeURIComponent(category)}}`, {{ cache: "no-store" }});
+                    if (!response.ok) throw new Error(`Request failed: ${{response.status}}`);
+                    const payload = await response.json();
+                    const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
+                    const groups = groupByFolder(blobs, payload.prefix || "");
+                    galleryEl.innerHTML = renderFolders(groups);
+                    statusEl.textContent = `${{blobs.length}} image(s) across ${{groups.length}} folder(s) • Updated ${{new Date().toLocaleTimeString()}}`;
                 }} catch (err) {{
                     console.error(err);
                     statusEl.textContent = `Error: ${{err.message}}`;
@@ -459,7 +546,7 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
                 btn.addEventListener("click", () => loadGallery(btn.dataset.category));
             }});
 
-            loadGallery(currentCategory);
+            loadGallery(defaultCategory);
             setInterval(() => loadGallery(currentCategory), refreshSeconds * 1000);
         </script>
     </body>
