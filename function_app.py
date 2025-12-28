@@ -529,7 +529,7 @@ def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
                 setActiveTab(category);
                 statusEl.textContent = "Loading...";
                 try {{
-                    const response = await fetch(`/gallery/images?category=${{encodeURIComponent(category)}}`, {{ cache: "no-store" }});
+                    const response = await fetch(`/api/gallery/images?category=${{encodeURIComponent(category)}}`, {{ cache: "no-store" }});
                     if (!response.ok) throw new Error(`Request failed: ${{response.status}}`);
                     const payload = await response.json();
                     const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
