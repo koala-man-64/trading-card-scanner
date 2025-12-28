@@ -270,7 +270,9 @@ def test_upload_parsing_results_to_input_container_under_card_folder(
         except ResourceExistsError:
             logging.info("Container 'input' already exists")
         except Exception as exc:
-            raise RuntimeError(f"Could not create/get container 'input': {exc}") from exc
+            raise RuntimeError(
+                f"Could not create/get container 'input': {exc}"
+            ) from exc
         cleanup_prefix = prefix
         # Parse cards from the sample input image.
         input_bytes = _read_input_sample("sample input 1.jpg")
@@ -281,9 +283,15 @@ def test_upload_parsing_results_to_input_container_under_card_folder(
         uploads = []
         for idx, (name, img_bytes) in enumerate(crops[:3], 1):
             # Reuse the same naming helper as the app so blob names mirror production outputs.
-            file_name = function_app._build_processed_card_name("sample input 1.jpg", idx)
+            file_name = function_app._build_processed_card_name(
+                "sample input 1.jpg", idx
+            )
             blob_name = f"{prefix}{file_name}"
-            input_container.upload_blob(name=blob_name, data=img_bytes, overwrite=True)
+            input_container.upload_blob(
+                name=blob_name,
+                data=img_bytes,
+                overwrite=True,
+            )
             uploads.append((blob_name, img_bytes))
 
         # Validate that the expected blob names exist under the prefix.

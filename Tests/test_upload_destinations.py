@@ -79,7 +79,11 @@ def test_process_blob_bytes_uploads_processed_cards(
     )
     source_path = str(INPUT_SAMPLES / "sample input 1.jpg")
 
-    function_app._process_blob_bytes(source_path, b"blob-bytes", container)  # type: ignore
+    function_app._process_blob_bytes(
+        source_path,
+        b"blob-bytes",
+        container,
+    )  # type: ignore
 
     assert container.uploads == [("sample input 1_1.jpg", sample_bytes, True)]
 
@@ -95,6 +99,10 @@ def test_process_blob_bytes_skips_upload_when_no_cards(
     )
     source_path = str(INPUT_SAMPLES / "sample input 1.jpg")
 
-    function_app._process_blob_bytes(source_path, b"blob-bytes", container)  # type: ignore
+    function_app._process_blob_bytes(
+        source_path,
+        b"blob-bytes",
+        container,
+    )  # type: ignore
 
     assert container.uploads == []

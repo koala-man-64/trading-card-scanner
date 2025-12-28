@@ -9,7 +9,6 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, Union
-from urllib.parse import quote
 
 import azure.functions as func
 from azure.storage.blob import (
@@ -33,7 +32,7 @@ GALLERY_CONTAINER_NAME = os.environ.get(
 GALLERY_RAW_PREFIX = os.environ.get("GALLERY_RAW_PREFIX", "raw")
 GALLERY_PROCESSED_PREFIX = os.environ.get("GALLERY_PROCESSED_PREFIX", "processed")
 GALLERY_SEGMENTED_PREFIX = os.environ.get("GALLERY_SEGMENTED_PREFIX", "segmented")
-GALLERY_REFRESH_SECONDS = float(os.environ.get("GALLERY_REFRESH_SECONDS", "5"))
+GALLERY_REFRESH_SECONDS = float(os.environ.get("GALLERY_REFRESH_SECONDS", "12000"))
 
 
 def _get_storage_clients() -> Tuple[
@@ -78,7 +77,11 @@ def _get_container_client(
         container_client = service_client.get_container_client(container_name)
         return service_client, container_client
     except Exception as exc:
-        logging.error("Failed to create blob container client for %s: %s", container_name, exc)
+        logging.error(
+            "Failed to create blob container client for %s: %s",
+            container_name,
+            exc,
+        )
         return None, None
 
 
