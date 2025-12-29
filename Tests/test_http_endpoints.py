@@ -2,7 +2,7 @@ import base64
 import io
 import json
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union
 from urllib.parse import parse_qs, urlparse
 
@@ -170,6 +170,27 @@ def test_list_blob_images_builds_payloads() -> None:
     assert items[0]["last_modified"] == last_modified.isoformat()
     assert items[1]["last_modified"] is None
     assert str(items[0]["url"]).startswith("/api/gallery/image?")
+
+
+def test_list_blob_images_filters_by_since() -> None:
+    base_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    blobs = [
+        _StubBlob("processed/old.jpg", size=120, last_modified=base_time),
+        _StubBlob("processed/new.jpg", size=120, last_modified=base_time + timedelta(minutes=5)),
+    ]
+    container = _StubContainerClient(blobs=blobs)
+    since = base_time + timedelta(minutes=1)
+
+    items = function_app._list_blob_images(
+        container,
+        "processed",
+        category="processed",
+        auth_code=None,
+        use_public_urls=False,
+        since=since,
+    )
+
+    assert [item["name"] for item in items] == ["processed/new.jpg"]
 
 
 def test_gallery_images_invalid_category_returns_400() -> None:

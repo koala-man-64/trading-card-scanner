@@ -7,6 +7,7 @@ import re
 import uuid
 import zipfile
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import urlencode
@@ -37,11 +38,13 @@ GALLERY_CONTAINER_NAME = os.environ.get(
 GALLERY_INPUT_PREFIX = os.environ.get("GALLERY_INPUT_PREFIX", "input")
 GALLERY_PROCESSED_PREFIX = os.environ.get("GALLERY_PROCESSED_PREFIX", "processed")
 GALLERY_SEGMENTED_PREFIX = os.environ.get("GALLERY_SEGMENTED_PREFIX", "segmented")
-GALLERY_REFRESH_SECONDS = float(os.environ.get("GALLERY_REFRESH_SECONDS", "12000"))
+GALLERY_REFRESH_SECONDS = float(os.environ.get("GALLERY_REFRESH_SECONDS", "5"))
 GALLERY_USE_PUBLIC_URLS = (
     os.environ.get("GALLERY_USE_PUBLIC_URLS", "").strip().lower()
     in {"1", "true", "yes", "on"}
 )
+GALLERY_TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "gallery.html"
+GALLERY_REFRESH_TOKEN = "__GALLERY_REFRESH_SECONDS__"
 STORAGE_AUTH_MODE = (
     os.environ.get("STORAGE_AUTH_MODE", "connection_string").strip().lower()
 )
@@ -64,6 +67,7 @@ DEFAULT_AUTH_LEVEL = _resolve_auth_level(
 GALLERY_AUTH_LEVEL = _resolve_auth_level(
     os.environ.get("GALLERY_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
 )
+
 HEALTH_AUTH_LEVEL = _resolve_auth_level(
     os.environ.get("HEALTH_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
 )
@@ -144,6 +148,44 @@ def _normalize_prefix(prefix: str) -> str:
     return f"{cleaned}/" if cleaned else ""
 
 
+@lru_cache(maxsize=1)
+def _load_gallery_template() -> Optional[str]:
+    try:
+        return GALLERY_TEMPLATE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        logging.error("Gallery template not found at %s", GALLERY_TEMPLATE_PATH)
+    except Exception as exc:
+        logging.error(
+            "Failed to read gallery template at %s: %s", GALLERY_TEMPLATE_PATH, exc
+        )
+    return None
+
+
+def _render_gallery_page(refresh_seconds: float) -> Optional[str]:
+    template = _load_gallery_template()
+    if not template:
+        return None
+    return template.replace(GALLERY_REFRESH_TOKEN, str(refresh_seconds))
+
+
+def _parse_since_param(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if cleaned.endswith("Z"):
+        cleaned = f"{cleaned[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(cleaned)
+    except ValueError:
+        logging.warning("Invalid since parameter '%s'; ignoring.", value)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _build_gallery_image_url(
     container_client: ContainerClient,
     blob_name: str,
@@ -168,15 +210,18 @@ def _list_blob_images(
     category: str,
     auth_code: Optional[str],
     use_public_urls: bool,
+    since: Optional[datetime] = None,
 ) -> List[Dict[str, object]]:
     blobs = []
     normalized_prefix = _normalize_prefix(prefix)
     for blob in container_client.list_blobs(name_starts_with=normalized_prefix):
-        last_modified = (
-            blob.last_modified.astimezone(timezone.utc).isoformat()
-            if getattr(blob, "last_modified", None)
-            else None
+        blob_modified = getattr(blob, "last_modified", None)
+        blob_modified_utc = (
+            blob_modified.astimezone(timezone.utc) if blob_modified else None
         )
+        if since and blob_modified_utc and blob_modified_utc < since:
+            continue
+        last_modified = blob_modified_utc.isoformat() if blob_modified_utc else None
         blobs.append(
             {
                 "name": blob.name,
@@ -335,6 +380,7 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     auth_code = req.params.get("code")
+    since = _parse_since_param(req.params.get("since"))
     try:
         blobs = _list_blob_images(
             container_client,
@@ -342,6 +388,7 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
             category=category,
             auth_code=auth_code,
             use_public_urls=GALLERY_USE_PUBLIC_URLS,
+            since=since,
         )
     except Exception as exc:
         logging.error("Failed to list blobs for gallery: %s", exc)
@@ -364,406 +411,11 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="gallery", methods=["GET"], auth_level=GALLERY_AUTH_LEVEL)
 def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
     """Serve a minimal gallery UI for browsing card images."""
-    html = f"""
-    <!doctype html>
-    <html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Trading Card Gallery</title>
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-        <style>
-            :root {{
-                color-scheme: light;
-                --bg: #f8f7f3;
-                --bg-wash: #eef3f2;
-                --surface: #ffffff;
-                --surface-muted: #f7f8fa;
-                --border: #e5e7eb;
-                --border-soft: #edeff2;
-                --text: #1f2933;
-                --muted: #6b7280;
-                --accent: #0f766e;
-                --accent-soft: #e4f3f1;
-                --shadow-sm: 0 10px 25px rgba(15, 23, 42, 0.06);
-                --shadow-xs: 0 4px 12px rgba(15, 23, 42, 0.05);
-            }}
-            * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-            body {{
-                font-family: "Work Sans", "Helvetica Neue", sans-serif;
-                background:
-                    radial-gradient(1200px 700px at 12% -10%, #fff9eb 0%, transparent 60%),
-                    radial-gradient(900px 600px at 95% 0%, #e6f2f1 0%, transparent 55%),
-                    linear-gradient(180deg, #f8f7f3 0%, #eef2f7 100%);
-                color: var(--text);
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
-                line-height: 1.5;
-            }}
-            header {{
-                position: sticky;
-                top: 0;
-                z-index: 10;
-                background: rgba(250, 249, 246, 0.92);
-                backdrop-filter: blur(8px);
-                border-bottom: 1px solid var(--border);
-                padding: 16px 20px;
-                display: flex;
-                gap: 12px;
-                align-items: center;
-            }}
-            .header-left {{
-                display: flex;
-                flex-direction: column;
-                gap: 4px;
-            }}
-            h1 {{
-                font-family: "Fraunces", "Iowan Old Style", serif;
-                font-size: 20px;
-                font-weight: 700;
-                letter-spacing: 0.2px;
-            }}
-            .status {{
-                font-size: 12px;
-                color: var(--muted);
-            }}
-            .status.error {{
-                color: #b45309;
-            }}
-            .header-right {{
-                margin-left: auto;
-            }}
-            .tabs {{
-                display: inline-flex;
-                align-items: center;
-                gap: 4px;
-                padding: 4px;
-                border-radius: 999px;
-                background: var(--surface);
-                border: 1px solid var(--border);
-                box-shadow: var(--shadow-xs);
-            }}
-            .tab {{
-                border: 0;
-                background: transparent;
-                color: var(--muted);
-                padding: 6px 14px;
-                border-radius: 999px;
-                cursor: pointer;
-                transition: background 0.15s ease, color 0.15s ease;
-                font-size: 13px;
-                font-weight: 500;
-                font-family: inherit;
-            }}
-            .tab:hover {{
-                color: var(--text);
-            }}
-            .tab.active {{
-                background: var(--accent-soft);
-                color: var(--accent);
-                font-weight: 600;
-            }}
-            .tab:focus-visible {{
-                outline: 2px solid var(--accent);
-                outline-offset: 2px;
-            }}
-            main {{
-                flex: 1;
-                overflow-y: auto;
-                padding: 24px 20px 48px;
-                width: 100%;
-                max-width: 1280px;
-                margin: 0 auto;
-            }}
-            .gallery {{
-                display: flex;
-                flex-direction: column;
-                gap: 24px;
-            }}
-            .folder {{
-                background: var(--surface);
-                border: 1px solid var(--border);
-                border-radius: 16px;
-                box-shadow: var(--shadow-sm);
-                overflow: hidden;
-            }}
-            .folder-header {{
-                padding: 14px 18px;
-                display: flex;
-                align-items: baseline;
-                gap: 8px;
-                border-bottom: 1px solid var(--border-soft);
-            }}
-            .folder-title {{
-                font-size: 14px;
-                font-weight: 600;
-            }}
-            .folder-count {{
-                color: var(--muted);
-                font-size: 12px;
-            }}
-            .grid {{
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-                gap: 18px;
-                padding: 18px;
-            }}
-            .card {{
-                background: var(--surface);
-                border: 1px solid var(--border);
-                border-radius: 14px;
-                overflow: hidden;
-                display: flex;
-                flex-direction: column;
-                box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
-                transition: transform 0.15s ease, box-shadow 0.15s ease;
-                animation: fadeUp 0.35s ease both;
-                animation-delay: calc(var(--stagger, 0) * 35ms);
-            }}
-            .card:hover {{
-                transform: translateY(-2px);
-                box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-            }}
-            .thumb {{
-                background: var(--surface-muted);
-                padding: 8px;
-                display: grid;
-                place-items: center;
-            }}
-            .thumb img {{
-                width: 100%;
-                height: auto;
-                aspect-ratio: 3 / 4;
-                object-fit: cover;
-                object-position: center;
-                border-radius: 10px;
-                background: #ffffff;
-                box-shadow: inset 0 0 0 1px var(--border-soft);
-            }}
-            .meta {{
-                padding: 12px 14px 14px;
-                display: flex;
-                flex-direction: column;
-                gap: 6px;
-            }}
-            .empty {{
-                text-align: center;
-                padding: 28px;
-                border: 1px dashed var(--border);
-                border-radius: 16px;
-                color: var(--muted);
-                background: var(--surface);
-            }}
-            .name {{
-                font-weight: 600;
-                color: var(--text);
-                font-size: 13px;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }}
-            .details {{
-                color: var(--muted);
-                font-size: 12px;
-            }}
-            @keyframes fadeUp {{
-                from {{ opacity: 0; transform: translateY(6px); }}
-                to {{ opacity: 1; transform: translateY(0); }}
-            }}
-            @media (max-width: 720px) {{
-                header {{
-                    flex-direction: column;
-                    align-items: flex-start;
-                    gap: 10px;
-                }}
-                .header-right {{
-                    width: 100%;
-                }}
-                .tabs {{
-                    width: 100%;
-                    justify-content: space-between;
-                }}
-            }}
-            @media (prefers-reduced-motion: reduce) {{
-                * {{
-                    animation: none !important;
-                    transition: none !important;
-                }}
-            }}
-        </style>
-    </head>
-    <body>
-        <header>
-            <div class="header-left">
-                <h1>Card Gallery</h1>
-                <div class="status" id="status" aria-live="polite"></div>
-            </div>
-            <div class="header-right">
-                <div class="tabs" role="tablist" aria-label="Gallery categories">
-                    <button class="tab" data-category="input" role="tab" aria-selected="false">Input</button>
-                    <button class="tab" data-category="processed" role="tab" aria-selected="false">Processed</button>
-                    <button class="tab" data-category="segmented" role="tab" aria-selected="false">Segmented</button>
-                </div>
-            </div>
-        </header>
-        <main>
-            <div class="gallery" id="gallery"></div>
-        </main>
-        <script>
-            const refreshSeconds = {GALLERY_REFRESH_SECONDS};
-            const defaultCategory = "processed";
-            const urlParams = new URLSearchParams(window.location.search);
-            const authCode = urlParams.get("code");
-            let currentCategory = defaultCategory;
-            const galleryEl = document.getElementById("gallery");
-            const statusEl = document.getElementById("status");
-
-            function formatBytes(bytes) {{
-                if (!bytes) return "0 B";
-                if (bytes < 1024) return `${{bytes}} B`;
-                const kb = bytes / 1024;
-                if (kb < 1024) return `${{Math.round(kb)}} KB`;
-                return `${{(kb / 1024).toFixed(2)}} MB`;
-            }}
-
-            function formatDate(value) {{
-                if (!value) return "";
-                const parsed = new Date(value);
-                if (Number.isNaN(parsed.getTime())) return value;
-                return parsed.toLocaleString();
-            }}
-
-            function setActiveTab(category) {{
-                document.querySelectorAll(".tab").forEach((btn) => {{
-                    const isActive = btn.dataset.category === category;
-                    btn.classList.toggle("active", isActive);
-                    btn.setAttribute("aria-selected", isActive ? "true" : "false");
-                }});
-            }}
-
-            function normalizeRelativeName(name, prefix) {{
-                const normalizedPrefix = prefix || "";
-                if (normalizedPrefix && name.startsWith(normalizedPrefix)) {{
-                    return name.slice(normalizedPrefix.length);
-                }}
-                return name;
-            }}
-
-            function groupByFolder(blobs, prefix) {{
-                const folders = new Map();
-                blobs.forEach((blob) => {{
-                    const relativeName = normalizeRelativeName(blob.name || "", prefix);
-                    const parts = relativeName.split("/").filter(Boolean);
-                    const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : "root";
-                    if (!folders.has(folder)) {{
-                        folders.set(folder, []);
-                    }}
-                    folders.get(folder).push(blob);
-                }});
-                return Array.from(folders.entries()).map(([folder, items]) => ({{
-                    folder,
-                    items,
-                }}));
-            }}
-
-            function formatFolderName(folder) {{
-                return folder === "root" ? "Root" : folder;
-            }}
-
-            function formatDisplayName(blob, prefix) {{
-                const relativeName = normalizeRelativeName(blob.name || "", prefix);
-                const parts = relativeName.split("/").filter(Boolean);
-                const shortName = parts.length ? parts[parts.length - 1] : relativeName;
-                return {{
-                    shortName,
-                    fullName: relativeName || blob.name || "",
-                }};
-            }}
-
-            function renderFolders(groups, prefix) {{
-                if (!groups.length) {{
-                    return `<div class="empty">No images yet for this category.</div>`;
-                }}
-
-                return groups.map((group) => {{
-                    const folderName = formatFolderName(group.folder);
-                    const cards = group.items.map((blob, index) => {{
-                        const nameInfo = formatDisplayName(blob, prefix);
-                        const dateLabel = formatDate(blob.last_modified);
-                        const details = [formatBytes(blob.size), dateLabel].filter(Boolean).join(" | ");
-                        return `
-                            <article class="card" style="--stagger: ${{index}}">
-                                <div class="thumb">
-                                    <img loading="lazy" decoding="async" src="${{blob.url}}" alt="${{nameInfo.fullName}}" />
-                                </div>
-                                <div class="meta">
-                                    <div class="name" title="${{nameInfo.fullName}}">${{nameInfo.shortName}}</div>
-                                    <div class="details">${{details}}</div>
-                                </div>
-                            </article>
-                        `;
-                    }}).join("");
-                    return `
-                        <section class="folder">
-                            <div class="folder-header">
-                                <div class="folder-title" title="${{group.folder}}">${{folderName}}</div>
-                                <div class="folder-count">${{group.items.length}} image(s)</div>
-                            </div>
-                            <div class="grid">
-                                ${{cards}}
-                            </div>
-                        </section>
-                    `;
-                }}).join("");
-            }}
-
-            function buildApiUrl(path, params) {{
-                const query = new URLSearchParams(params);
-                if (authCode) {{
-                    query.set("code", authCode);
-                }}
-                const qs = query.toString();
-                return qs ? `${{path}}?${{qs}}` : path;
-            }}
-
-            async function loadGallery(category) {{
-                currentCategory = category;
-                setActiveTab(category);
-                statusEl.classList.remove("error");
-                statusEl.textContent = "Loading images...";
-                galleryEl.innerHTML = `<div class="empty">Loading images...</div>`;
-                try {{
-                    const response = await fetch(
-                        buildApiUrl("/api/gallery/images", {{ category }}),
-                        {{ cache: "no-store" }}
-                    );
-                    if (!response.ok) throw new Error(`Request failed: ${{response.status}}`);
-                    const payload = await response.json();
-                    const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
-                    const groups = groupByFolder(blobs, payload.prefix || "");
-                    galleryEl.innerHTML = renderFolders(groups, payload.prefix || "");
-                    statusEl.textContent = `${{blobs.length}} image(s) in ${{groups.length}} folder(s) | Updated ${{new Date().toLocaleTimeString()}}`;
-                }} catch (err) {{
-                    console.error(err);
-                    statusEl.classList.add("error");
-                    statusEl.textContent = `Error: ${{err.message}}`;
-                    galleryEl.innerHTML = `<div class="empty">We couldn't load images. Try again shortly.</div>`;
-                }}
-            }}
-
-            document.querySelectorAll(".tab").forEach((btn) => {{
-                btn.addEventListener("click", () => loadGallery(btn.dataset.category));
-            }});
-
-            loadGallery(defaultCategory);
-            setInterval(() => loadGallery(currentCategory), refreshSeconds * 1000);
-        </script>
-    </body>
-    </html>
-    """
+    html = _render_gallery_page(GALLERY_REFRESH_SECONDS)
+    if not html:
+        return func.HttpResponse(
+            "Gallery template is unavailable.", status_code=500, mimetype="text/plain"
+        )
     return func.HttpResponse(html, status_code=200, mimetype="text/html")
 
 

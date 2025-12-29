@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Trading Card Gallery</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f8f7f3;
+            --bg-wash: #eef3f2;
+            --surface: #ffffff;
+            --surface-muted: #f7f8fa;
+            --border: #e5e7eb;
+            --border-soft: #edeff2;
+            --text: #1f2933;
+            --muted: #6b7280;
+            --accent: #0f766e;
+            --accent-soft: #e4f3f1;
+            --shadow-sm: 0 10px 25px rgba(15, 23, 42, 0.06);
+            --shadow-xs: 0 4px 12px rgba(15, 23, 42, 0.05);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: "Work Sans", "Helvetica Neue", sans-serif;
+            background:
+                radial-gradient(1200px 700px at 12% -10%, #fff9eb 0%, transparent 60%),
+                radial-gradient(900px 600px at 95% 0%, #e6f2f1 0%, transparent 55%),
+                linear-gradient(180deg, #f8f7f3 0%, #eef2f7 100%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            line-height: 1.5;
+        }
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: rgba(250, 249, 246, 0.92);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 20px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        .header-left {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        h1 {
+            font-family: "Fraunces", "Iowan Old Style", serif;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+        }
+        .status {
+            font-size: 12px;
+            color: var(--muted);
+        }
+        .status.error {
+            color: #b45309;
+        }
+        .header-right {
+            margin-left: auto;
+        }
+        .tabs {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px;
+            border-radius: 999px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow-xs);
+        }
+        .tab {
+            border: 0;
+            background: transparent;
+            color: var(--muted);
+            padding: 6px 14px;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease;
+            font-size: 13px;
+            font-weight: 500;
+            font-family: inherit;
+        }
+        .tab:hover {
+            color: var(--text);
+        }
+        .tab.active {
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-weight: 600;
+        }
+        .tab:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+        main {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px 20px 48px;
+            width: 100%;
+            max-width: 1280px;
+            margin: 0 auto;
+        }
+        .gallery {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+        .folder {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+        .folder-header {
+            padding: 14px 18px;
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .folder-title {
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .folder-count {
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 18px;
+            padding: 18px;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+            transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.25s ease;
+        }
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+        }
+        .thumb {
+            background: var(--surface-muted);
+            padding: 8px;
+            display: grid;
+            place-items: center;
+        }
+        .thumb img {
+            width: 100%;
+            height: auto;
+            aspect-ratio: 3 / 4;
+            object-fit: cover;
+            object-position: center;
+            border-radius: 10px;
+            background: #ffffff;
+            box-shadow: inset 0 0 0 1px var(--border-soft);
+        }
+        .meta {
+            padding: 12px 14px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .empty {
+            text-align: center;
+            padding: 28px;
+            border: 1px dashed var(--border);
+            border-radius: 16px;
+            color: var(--muted);
+            background: var(--surface);
+        }
+        .name {
+            font-weight: 600;
+            color: var(--text);
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .details {
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .folder.is-entering,
+        .card.is-entering,
+        .folder.is-removing,
+        .card.is-removing {
+            opacity: 0;
+            transform: translateY(8px);
+        }
+        @media (max-width: 720px) {
+            header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            .header-right {
+                width: 100%;
+            }
+            .tabs {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                animation: none !important;
+                transition: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <h1>Card Gallery</h1>
+            <div class="status" id="status" aria-live="polite"></div>
+        </div>
+        <div class="header-right">
+            <div class="tabs" role="tablist" aria-label="Gallery categories">
+                <button class="tab" data-category="input" role="tab" aria-selected="false">Input</button>
+                <button class="tab" data-category="processed" role="tab" aria-selected="false">Processed</button>
+                <button class="tab" data-category="segmented" role="tab" aria-selected="false">Segmented</button>
+            </div>
+        </div>
+    </header>
+    <main>
+        <div class="gallery" id="gallery"></div>
+    </main>
+    <script>
+        const refreshSeconds = __GALLERY_REFRESH_SECONDS__;
+        const defaultCategory = "processed";
+        const urlParams = new URLSearchParams(window.location.search);
+        const authCode = urlParams.get("code");
+        let currentCategory = defaultCategory;
+        const galleryEl = document.getElementById("gallery");
+        const statusEl = document.getElementById("status");
+        const cacheByCategory = new Map();
+        const emptyStateEl = document.createElement("div");
+        emptyStateEl.className = "empty";
+
+        function setEmptyState(message) {
+            if (!message) {
+                if (emptyStateEl.parentElement) {
+                    emptyStateEl.remove();
+                }
+                return;
+            }
+            emptyStateEl.textContent = message;
+            if (!galleryEl.contains(emptyStateEl)) {
+                galleryEl.appendChild(emptyStateEl);
+            }
+        }
+
+        function animateIn(el) {
+            if (!el) return;
+            el.classList.add("is-entering");
+            requestAnimationFrame(() => {
+                el.classList.remove("is-entering");
+            });
+        }
+
+        function animateOut(el) {
+            if (!el || el.classList.contains("is-removing")) return;
+            el.classList.add("is-removing");
+            el.addEventListener("transitionend", () => el.remove(), { once: true });
+            setTimeout(() => {
+                if (el.isConnected) {
+                    el.remove();
+                }
+            }, 400);
+        }
+
+        function getCategoryCache(category) {
+            if (!cacheByCategory.has(category)) {
+                cacheByCategory.set(category, {
+                    blobs: [],
+                    index: new Map(),
+                    lastSeenIso: "",
+                    prefix: "",
+                });
+            }
+            return cacheByCategory.get(category);
+        }
+
+        function resetCategoryCache(cache) {
+            cache.blobs = [];
+            cache.index = new Map();
+            cache.lastSeenIso = "";
+        }
+
+        function normalizeIso(value) {
+            if (!value) return "";
+            const parsed = new Date(value);
+            if (Number.isNaN(parsed.getTime())) return "";
+            return parsed.toISOString();
+        }
+
+        function updateLastSeen(cache, value) {
+            const normalized = normalizeIso(value);
+            if (!normalized) return;
+            if (!cache.lastSeenIso || normalized > cache.lastSeenIso) {
+                cache.lastSeenIso = normalized;
+            }
+        }
+
+        function mergeBlobs(cache, blobs) {
+            let addedCount = 0;
+            blobs.forEach((blob) => {
+                if (!blob || !blob.name) return;
+                if (cache.index.has(blob.name)) {
+                    const idx = cache.index.get(blob.name);
+                    cache.blobs[idx] = blob;
+                } else {
+                    cache.index.set(blob.name, cache.blobs.length);
+                    cache.blobs.push(blob);
+                    addedCount += 1;
+                }
+                updateLastSeen(cache, blob.last_modified);
+            });
+            return addedCount;
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes) return "0 B";
+            if (bytes < 1024) return `${bytes} B`;
+            const kb = bytes / 1024;
+            if (kb < 1024) return `${Math.round(kb)} KB`;
+            return `${(kb / 1024).toFixed(2)} MB`;
+        }
+
+        function formatDate(value) {
+            if (!value) return "";
+            const parsed = new Date(value);
+            if (Number.isNaN(parsed.getTime())) return value;
+            return parsed.toLocaleString();
+        }
+
+        function setActiveTab(category) {
+            document.querySelectorAll(".tab").forEach((btn) => {
+                const isActive = btn.dataset.category === category;
+                btn.classList.toggle("active", isActive);
+                btn.setAttribute("aria-selected", isActive ? "true" : "false");
+            });
+        }
+
+        function normalizeRelativeName(name, prefix) {
+            const normalizedPrefix = prefix || "";
+            if (normalizedPrefix && name.startsWith(normalizedPrefix)) {
+                return name.slice(normalizedPrefix.length);
+            }
+            return name;
+        }
+
+        function groupByFolder(blobs, prefix) {
+            const folders = new Map();
+            blobs.forEach((blob) => {
+                const relativeName = normalizeRelativeName(blob.name || "", prefix);
+                const parts = relativeName.split("/").filter(Boolean);
+                const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : "root";
+                if (!folders.has(folder)) {
+                    folders.set(folder, []);
+                }
+                folders.get(folder).push(blob);
+            });
+            return Array.from(folders.entries()).map(([folder, items]) => ({
+                folder,
+                items,
+            }));
+        }
+
+        function formatFolderName(folder) {
+            return folder === "root" ? "Root" : folder;
+        }
+
+        function formatDisplayName(blob, prefix) {
+            const relativeName = normalizeRelativeName(blob.name || "", prefix);
+            const parts = relativeName.split("/").filter(Boolean);
+            const shortName = parts.length ? parts[parts.length - 1] : relativeName;
+            return {
+                shortName,
+                fullName: relativeName || blob.name || "",
+            };
+        }
+
+        function createFolderElement(folder) {
+            const section = document.createElement("section");
+            section.className = "folder";
+            section.dataset.folder = folder;
+
+            const header = document.createElement("div");
+            header.className = "folder-header";
+
+            const title = document.createElement("div");
+            title.className = "folder-title";
+
+            const count = document.createElement("div");
+            count.className = "folder-count";
+
+            header.append(title, count);
+
+            const grid = document.createElement("div");
+            grid.className = "grid";
+
+            section.append(header, grid);
+            return section;
+        }
+
+        function updateFolderHeader(folderEl, folderName, count) {
+            const titleEl = folderEl.querySelector(".folder-title");
+            const countEl = folderEl.querySelector(".folder-count");
+            const displayName = formatFolderName(folderName);
+            if (titleEl) {
+                titleEl.textContent = displayName;
+                titleEl.title = folderName;
+            }
+            if (countEl) {
+                countEl.textContent = `${count} image(s)`;
+            }
+        }
+
+        function createCardElement(blob, prefix) {
+            const card = document.createElement("article");
+            card.className = "card";
+            card.dataset.name = blob.name || "";
+
+            const thumb = document.createElement("div");
+            thumb.className = "thumb";
+
+            const img = document.createElement("img");
+            img.loading = "lazy";
+            img.decoding = "async";
+            thumb.appendChild(img);
+
+            const meta = document.createElement("div");
+            meta.className = "meta";
+
+            const nameEl = document.createElement("div");
+            nameEl.className = "name";
+
+            const detailsEl = document.createElement("div");
+            detailsEl.className = "details";
+
+            meta.append(nameEl, detailsEl);
+            card.append(thumb, meta);
+
+            updateCardElement(card, blob, prefix);
+            return card;
+        }
+
+        function updateCardElement(cardEl, blob, prefix) {
+            if (!cardEl || !blob) return;
+            const nameInfo = formatDisplayName(blob, prefix);
+            const dateLabel = formatDate(blob.last_modified);
+            const details = [formatBytes(blob.size), dateLabel].filter(Boolean).join(" | ");
+
+            cardEl.dataset.name = blob.name || "";
+
+            const imgEl = cardEl.querySelector("img");
+            if (imgEl) {
+                imgEl.alt = nameInfo.fullName;
+                if (blob.url && imgEl.dataset.src !== blob.url) {
+                    imgEl.src = blob.url;
+                    imgEl.dataset.src = blob.url;
+                }
+            }
+
+            const nameEl = cardEl.querySelector(".name");
+            if (nameEl) {
+                nameEl.textContent = nameInfo.shortName;
+                nameEl.title = nameInfo.fullName;
+            }
+
+            const detailsEl = cardEl.querySelector(".details");
+            if (detailsEl) {
+                detailsEl.textContent = details;
+            }
+        }
+
+        function syncFolderCards(folderEl, items, prefix) {
+            const grid = folderEl.querySelector(".grid");
+            if (!grid) return;
+
+            const existingCards = new Map();
+            Array.from(grid.children).forEach((child) => {
+                if (child.classList.contains("card")) {
+                    existingCards.set(child.dataset.name || "", child);
+                }
+            });
+
+            items.forEach((blob) => {
+                if (!blob || !blob.name) return;
+                const existing = existingCards.get(blob.name);
+                if (existing) {
+                    updateCardElement(existing, blob, prefix);
+                    existingCards.delete(blob.name);
+                } else {
+                    const cardEl = createCardElement(blob, prefix);
+                    grid.appendChild(cardEl);
+                    animateIn(cardEl);
+                }
+            });
+
+            existingCards.forEach((cardEl) => {
+                animateOut(cardEl);
+            });
+        }
+
+        function syncGalleryDom(cache, options = {}) {
+            const prefix = cache.prefix || "";
+            const groups = groupByFolder(cache.blobs, prefix);
+            const existingFolders = new Map();
+
+            Array.from(galleryEl.children).forEach((child) => {
+                if (child.classList.contains("folder")) {
+                    existingFolders.set(child.dataset.folder || "root", child);
+                }
+            });
+
+            if (!groups.length) {
+                if (options.emptyMessage !== undefined) {
+                    setEmptyState(options.emptyMessage);
+                } else {
+                    setEmptyState("No images yet for this category.");
+                }
+            } else {
+                setEmptyState("");
+            }
+
+            groups.forEach((group) => {
+                const folderKey = group.folder || "root";
+                let folderEl = existingFolders.get(folderKey);
+                if (!folderEl) {
+                    folderEl = createFolderElement(folderKey);
+                    galleryEl.appendChild(folderEl);
+                    animateIn(folderEl);
+                } else {
+                    existingFolders.delete(folderKey);
+                }
+                updateFolderHeader(folderEl, folderKey, group.items.length);
+                syncFolderCards(folderEl, group.items, prefix);
+            });
+
+            existingFolders.forEach((folderEl) => {
+                animateOut(folderEl);
+            });
+
+            return groups;
+        }
+
+        function buildApiUrl(path, params) {
+            const query = new URLSearchParams(params);
+            if (authCode) {
+                query.set("code", authCode);
+            }
+            const qs = query.toString();
+            return qs ? `${path}?${qs}` : path;
+        }
+
+        async function loadGallery(category) {
+            currentCategory = category;
+            setActiveTab(category);
+            const cache = getCategoryCache(category);
+            const hasCache = cache.blobs.length > 0;
+            statusEl.classList.remove("error");
+            statusEl.textContent = hasCache ? "Checking for updates..." : "Loading images...";
+            syncGalleryDom(cache, {
+                emptyMessage: hasCache ? "" : "Loading images...",
+            });
+            try {
+                const params = { category };
+                if (cache.lastSeenIso) {
+                    params.since = cache.lastSeenIso;
+                }
+                const response = await fetch(
+                    buildApiUrl("/api/gallery/images", params),
+                    { cache: "no-store" }
+                );
+                if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+                const payload = await response.json();
+                const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
+                const isIncremental = Boolean(params.since);
+                if (!isIncremental) {
+                    resetCategoryCache(cache);
+                }
+                if (typeof payload.prefix === "string") {
+                    cache.prefix = payload.prefix;
+                }
+                const addedCount = mergeBlobs(cache, blobs);
+                const groups = syncGalleryDom(cache);
+                const newLabel = isIncremental && addedCount ? ` (+${addedCount} new)` : "";
+                statusEl.textContent = `${cache.blobs.length} image(s) in ${groups.length} folder(s)${newLabel} | Updated ${new Date().toLocaleTimeString()}`;
+            } catch (err) {
+                console.error(err);
+                statusEl.classList.add("error");
+                statusEl.textContent = `Error: ${err.message}`;
+                if (!hasCache) {
+                    setEmptyState("We couldn't load images. Try again shortly.");
+                }
+            }
+        }
+
+        document.querySelectorAll(".tab").forEach((btn) => {
+            btn.addEventListener("click", () => loadGallery(btn.dataset.category));
+        });
+
+        loadGallery(defaultCategory);
+        setInterval(() => loadGallery(currentCategory), refreshSeconds * 1000);
+    </script>
+</body>
+</html>
