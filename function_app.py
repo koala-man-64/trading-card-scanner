@@ -10,12 +10,14 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple, Union, cast
 from urllib.parse import urlencode
 
 import azure.functions as func
 from azure.core.exceptions import ResourceNotFoundError
+from azure.core.paging import ItemPaged
 from azure.storage.blob import (
+    BlobClient,
     BlobServiceClient,
     ContainerClient,
 )
@@ -68,7 +70,7 @@ class _GalleryContainerClient(Protocol):
         snapshot: Optional[str] = None,
         *,
         version_id: Optional[str] = None,
-    ) -> _BlobClientUrl: ...
+    ) -> _BlobClientUrl | BlobClient: ...
 
     def list_blobs(
         self,
@@ -77,7 +79,7 @@ class _GalleryContainerClient(Protocol):
         *,
         timeout: Optional[int] = None,
         **kwargs: Any,
-    ) -> Iterable[_BlobListItem]: ...
+    ) -> Iterable[_BlobListItem] | ItemPaged[Any]: ...
 
 
 class _UploadContainerClient(Protocol):
@@ -243,7 +245,8 @@ def _build_gallery_image_url(
     use_public_urls: bool,
 ) -> str:
     if use_public_urls:
-        return container_client.get_blob_client(blob_name).url
+        blob_client = cast(_BlobClientUrl, container_client.get_blob_client(blob_name))
+        return blob_client.url
 
     params = {"name": blob_name, "category": category}
     if auth_code:
@@ -263,7 +266,11 @@ def _list_blob_images(
     blobs = []
     normalized_prefix = _normalize_prefix(prefix)
     latest_modified: Optional[datetime] = None
-    for blob in container_client.list_blobs(name_starts_with=normalized_prefix):
+    blobs_iter = cast(
+        Iterable[_BlobListItem],
+        container_client.list_blobs(name_starts_with=normalized_prefix),
+    )
+    for blob in blobs_iter:
         blob_modified = getattr(blob, "last_modified", None)
         blob_modified_utc = (
             blob_modified.astimezone(timezone.utc) if blob_modified else None
@@ -465,9 +472,10 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
 
     auth_code = req.params.get("code")
     since = _parse_since_param(req.params.get("since"))
+    gallery_container = cast(_GalleryContainerClient, container_client)
     try:
         blobs, latest_modified = _list_blob_images(
-            container_client,
+            gallery_container,
             prefix,
             category=category,
             auth_code=auth_code,
