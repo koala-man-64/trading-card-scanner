@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Protocol, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple, Union
 from urllib.parse import urlencode
 
 import azure.functions as func
@@ -62,10 +62,21 @@ class _BlobListItem(Protocol):
 
 
 class _GalleryContainerClient(Protocol):
-    def get_blob_client(self, name: str) -> _BlobClientUrl: ...
+    def get_blob_client(
+        self,
+        blob: str,
+        snapshot: Optional[str] = None,
+        *,
+        version_id: Optional[str] = None,
+    ) -> _BlobClientUrl: ...
 
     def list_blobs(
-        self, name_starts_with: Optional[str] = None
+        self,
+        name_starts_with: Optional[str] = None,
+        include: str | list[str] | None = None,
+        *,
+        timeout: Optional[int] = None,
+        **kwargs: Any,
     ) -> Iterable[_BlobListItem]: ...
 
 

@@ -113,13 +113,26 @@ class _StubContainerClient:
         self.container_name = "container"
         self.last_prefix: Optional[str] = None
 
-    def list_blobs(self, name_starts_with: Optional[str] = None):
+    def list_blobs(
+        self,
+        name_starts_with: Optional[str] = None,
+        include: Optional[Union[str, List[str]]] = None,
+        *,
+        timeout: Optional[int] = None,
+        **kwargs: object,
+    ):
         self.last_prefix = name_starts_with
         return list(self._blobs)
 
-    def get_blob_client(self, name: str) -> _StubBlobClient:
+    def get_blob_client(
+        self,
+        blob: str,
+        snapshot: Optional[str] = None,
+        *,
+        version_id: Optional[str] = None,
+    ) -> _StubBlobClient:
         return _StubBlobClient(
-            name,
+            blob,
             self._data_map,
             self._content_types,
             etag_map=self._etag_map,
