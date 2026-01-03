@@ -62,18 +62,15 @@ class _BlobListItem(Protocol):
 
 
 class _GalleryContainerClient(Protocol):
-    def get_blob_client(self, name: str) -> _BlobClientUrl:
-        ...
+    def get_blob_client(self, name: str) -> _BlobClientUrl: ...
 
     def list_blobs(
         self, name_starts_with: Optional[str] = None
-    ) -> Iterable[_BlobListItem]:
-        ...
+    ) -> Iterable[_BlobListItem]: ...
 
 
 class _UploadContainerClient(Protocol):
-    def upload_blob(self, name: str, data: bytes, *, overwrite: bool) -> object:
-        ...
+    def upload_blob(self, name: str, data: bytes, *, overwrite: bool) -> object: ...
 
 
 def _resolve_auth_level(
