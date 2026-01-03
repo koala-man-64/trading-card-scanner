@@ -34,7 +34,7 @@ import function_app
 from card_processor import process_utils
 from function_app import _upload_processed_cards
 
-from tests.helpers import get_storage_connection
+from .helpers import get_storage_connection
 
 
 SAMPLES = Path(__file__).parent / "samples"
