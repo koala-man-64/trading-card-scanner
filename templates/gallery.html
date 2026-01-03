@@ -253,6 +253,7 @@
         const urlParams = new URLSearchParams(window.location.search);
         const authCode = urlParams.get("code");
         let currentCategory = defaultCategory;
+        let requestSequence = 0;
         const galleryEl = document.getElementById("gallery");
         const statusEl = document.getElementById("status");
         const cacheByCategory = new Map();
@@ -578,6 +579,7 @@
         }
 
         async function loadGallery(category) {
+            const requestId = ++requestSequence;
             currentCategory = category;
             setActiveTab(category);
             const cache = getCategoryCache(category);
@@ -596,8 +598,10 @@
                     buildApiUrl("/api/gallery/images", params),
                     { cache: "no-store" }
                 );
+                if (requestId !== requestSequence) return;
                 if (!response.ok) throw new Error(`Request failed: ${response.status}`);
                 const payload = await response.json();
+                if (requestId !== requestSequence) return;
                 const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
                 const isIncremental = Boolean(params.since);
                 if (!isIncremental) {
@@ -606,11 +610,15 @@
                 if (typeof payload.prefix === "string") {
                     cache.prefix = payload.prefix;
                 }
+                if (typeof payload.next_since === "string") {
+                    updateLastSeen(cache, payload.next_since);
+                }
                 const addedCount = mergeBlobs(cache, blobs);
                 const groups = syncGalleryDom(cache);
                 const newLabel = isIncremental && addedCount ? ` (+${addedCount} new)` : "";
                 statusEl.textContent = `${cache.blobs.length} image(s) in ${groups.length} folder(s)${newLabel} | Updated ${new Date().toLocaleTimeString()}`;
             } catch (err) {
+                if (requestId !== requestSequence) return;
                 console.error(err);
                 statusEl.classList.add("error");
                 statusEl.textContent = `Error: ${err.message}`;

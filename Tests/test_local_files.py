@@ -4,10 +4,10 @@ import cv2
 import numpy as np
 import pytest
 
-from CardProcessor import process_utils
+from card_processor import process_utils
 
 
-SAMPLES = Path(__file__).parent / "Samples"
+SAMPLES = Path(__file__).parent / "samples"
 INPUT_DIR = SAMPLES / "input"
 ALL_INPUT_IMAGES = (
     sorted(
@@ -20,11 +20,11 @@ ALL_INPUT_IMAGES = (
 )
 CORE_INPUT_IMAGES = [
     name
-    for name in ("sample input 1.jpg", "sample input 2.jpg")
+    for name in ("sample_input_1.jpg", "sample_input_2.jpg")
     if (INPUT_DIR / name).exists()
 ]
 if not CORE_INPUT_IMAGES:
-    CORE_INPUT_IMAGES = ALL_INPUT_IMAGES[:2] or ["sample input 1.jpg"]
+    CORE_INPUT_IMAGES = ALL_INPUT_IMAGES[:2] or ["sample_input_1.jpg"]
 
 
 def _read_input_sample(name: str) -> bytes:
@@ -63,7 +63,7 @@ def test_detect_cards_finds_boxes_in_sample_image(sample_name: str):
 
 
 @pytest.mark.parametrize(
-    "sample_name", ALL_INPUT_IMAGES or CORE_INPUT_IMAGES or ["sample input 1.jpg"]
+    "sample_name", ALL_INPUT_IMAGES or CORE_INPUT_IMAGES or ["sample_input_1.jpg"]
 )
 def test_extract_card_crops_handles_input_samples(sample_name: str):
     data = _read_input_sample(sample_name)

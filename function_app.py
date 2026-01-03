@@ -7,6 +7,7 @@ import re
 import uuid
 import zipfile
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, Union
@@ -19,8 +20,8 @@ from azure.storage.blob import (
     ContainerClient,
 )
 
-from CardProcessor import process_utils
-from CardProcessor.layout_analysis import analyze_layout_from_image_bytes
+from card_processor import process_utils
+from card_processor.layout_analysis import analyze_layout_from_image_bytes
 
 try:
     from azure.identity import DefaultAzureCredential
@@ -39,10 +40,9 @@ GALLERY_INPUT_PREFIX = os.environ.get("GALLERY_INPUT_PREFIX", "input")
 GALLERY_PROCESSED_PREFIX = os.environ.get("GALLERY_PROCESSED_PREFIX", "processed")
 GALLERY_SEGMENTED_PREFIX = os.environ.get("GALLERY_SEGMENTED_PREFIX", "segmented")
 GALLERY_REFRESH_SECONDS = float(os.environ.get("GALLERY_REFRESH_SECONDS", "5"))
-GALLERY_USE_PUBLIC_URLS = (
-    os.environ.get("GALLERY_USE_PUBLIC_URLS", "").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
+GALLERY_USE_PUBLIC_URLS = os.environ.get(
+    "GALLERY_USE_PUBLIC_URLS", ""
+).strip().lower() in {"1", "true", "yes", "on"}
 GALLERY_TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "gallery.html"
 GALLERY_REFRESH_TOKEN = "__GALLERY_REFRESH_SECONDS__"
 STORAGE_AUTH_MODE = (
@@ -51,7 +51,9 @@ STORAGE_AUTH_MODE = (
 STORAGE_ACCOUNT_URL = os.environ.get("STORAGE_ACCOUNT_URL")
 
 
-def _resolve_auth_level(value: Optional[str], default: func.AuthLevel) -> func.AuthLevel:
+def _resolve_auth_level(
+    value: Optional[str], default: func.AuthLevel
+) -> func.AuthLevel:
     if not value:
         return default
     normalized = value.strip().upper()
@@ -99,7 +101,9 @@ def _get_storage_service_client() -> Optional[BlobServiceClient]:
             )
             return None
         if DefaultAzureCredential is None:
-            logging.error("azure-identity is not installed; cannot use managed identity")
+            logging.error(
+                "azure-identity is not installed; cannot use managed identity"
+            )
             return None
         try:
             credential = DefaultAzureCredential()
@@ -168,6 +172,17 @@ def _render_gallery_page(refresh_seconds: float) -> Optional[str]:
     return template.replace(GALLERY_REFRESH_TOKEN, str(refresh_seconds))
 
 
+def _format_rfc3339(value: datetime) -> str:
+    normalized = value.astimezone(timezone.utc)
+    formatted = normalized.isoformat(timespec="milliseconds")
+    return formatted.replace("+00:00", "Z")
+
+
+def _format_http_datetime(value: datetime) -> str:
+    normalized = value.astimezone(timezone.utc)
+    return normalized.strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+
 def _parse_since_param(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -211,9 +226,10 @@ def _list_blob_images(
     auth_code: Optional[str],
     use_public_urls: bool,
     since: Optional[datetime] = None,
-) -> List[Dict[str, object]]:
+) -> Tuple[List[Dict[str, object]], Optional[datetime]]:
     blobs = []
     normalized_prefix = _normalize_prefix(prefix)
+    latest_modified: Optional[datetime] = None
     for blob in container_client.list_blobs(name_starts_with=normalized_prefix):
         blob_modified = getattr(blob, "last_modified", None)
         blob_modified_utc = (
@@ -221,7 +237,13 @@ def _list_blob_images(
         )
         if since and blob_modified_utc and blob_modified_utc < since:
             continue
-        last_modified = blob_modified_utc.isoformat() if blob_modified_utc else None
+        if blob_modified_utc and (
+            latest_modified is None or blob_modified_utc > latest_modified
+        ):
+            latest_modified = blob_modified_utc
+        last_modified = (
+            _format_rfc3339(blob_modified_utc) if blob_modified_utc else None
+        )
         blobs.append(
             {
                 "name": blob.name,
@@ -236,7 +258,36 @@ def _list_blob_images(
                 ),
             }
         )
-    return blobs
+    return blobs, latest_modified
+
+
+def _is_not_modified(
+    req: func.HttpRequest,
+    *,
+    etag: Optional[str],
+    last_modified: Optional[datetime],
+) -> bool:
+    if etag:
+        if_none_match = req.headers.get("If-None-Match")
+        if if_none_match and if_none_match.strip() == etag:
+            return True
+
+    if last_modified:
+        if_modified_since = req.headers.get("If-Modified-Since")
+        if if_modified_since:
+            try:
+                parsed_since = parsedate_to_datetime(if_modified_since)
+            except (TypeError, ValueError):
+                parsed_since = None
+            if parsed_since is not None:
+                if parsed_since.tzinfo is None:
+                    parsed_since = parsed_since.replace(tzinfo=timezone.utc)
+                if last_modified.astimezone(timezone.utc) <= parsed_since.astimezone(
+                    timezone.utc
+                ):
+                    return True
+
+    return False
 
 
 def _build_processed_card_name(source_name: str, idx: int) -> str:
@@ -382,7 +433,7 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
     auth_code = req.params.get("code")
     since = _parse_since_param(req.params.get("since"))
     try:
-        blobs = _list_blob_images(
+        blobs, latest_modified = _list_blob_images(
             container_client,
             prefix,
             category=category,
@@ -394,13 +445,16 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
         logging.error("Failed to list blobs for gallery: %s", exc)
         return func.HttpResponse("Failed to list images.", status_code=500)
 
+    refreshed_at = datetime.now(timezone.utc)
+    next_since = latest_modified or since or refreshed_at
     payload = {
         "container": container_client.container_name,
         "category": category,
         "prefix": _normalize_prefix(prefix),
         "blobs": blobs,
-        "refreshed_at": datetime.now(timezone.utc).isoformat(),
+        "refreshed_at": _format_rfc3339(refreshed_at),
         "refresh_seconds": GALLERY_REFRESH_SECONDS,
+        "next_since": _format_rfc3339(next_since),
     }
     return func.HttpResponse(
         body=json.dumps(payload), status_code=200, mimetype="application/json"
@@ -450,9 +504,17 @@ def gallery_image(req: func.HttpRequest) -> func.HttpResponse:
     blob_client = container_client.get_blob_client(name)
     try:
         props = blob_client.get_blob_properties()
-        content_type = (
-            props.content_settings.content_type or "application/octet-stream"
-        )
+        content_type = props.content_settings.content_type or "application/octet-stream"
+        etag = props.etag
+        last_modified = getattr(props, "last_modified", None)
+        if _is_not_modified(req, etag=etag, last_modified=last_modified):
+            headers = {"Cache-Control": "public, max-age=60"}
+            if etag:
+                headers["ETag"] = etag
+            if last_modified:
+                headers["Last-Modified"] = _format_http_datetime(last_modified)
+            return func.HttpResponse(status_code=304, headers=headers)
+
         data = blob_client.download_blob().readall()
     except ResourceNotFoundError:
         return func.HttpResponse("Blob not found.", status_code=404)
@@ -461,6 +523,10 @@ def gallery_image(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed to download image.", status_code=500)
 
     headers = {"Cache-Control": "public, max-age=60"}
+    if etag:
+        headers["ETag"] = etag
+    if last_modified:
+        headers["Last-Modified"] = _format_http_datetime(last_modified)
     return func.HttpResponse(
         body=data, status_code=200, mimetype=content_type, headers=headers
     )

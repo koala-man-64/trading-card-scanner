@@ -1,0 +1,14 @@
+# App dependencies
+azure-functions
+azure-storage-blob
+opencv-python
+numpy
+Pillow
+ultralytics
+huggingface-hub
+
+# Dev/test dependencies
+pytest
+pytest-cov
+ruff
+mypy

@@ -11,7 +11,7 @@ import pytest
 from azure.core.exceptions import ResourceNotFoundError
 
 import function_app
-from CardProcessor.layout_types import LayoutAnalysisResult, LayoutElement
+from card_processor.layout_types import LayoutAnalysisResult, LayoutElement
 
 
 class _StubRequest:
@@ -44,8 +44,15 @@ class _StubContentSettings:
 
 
 class _StubBlobProperties:
-    def __init__(self, content_type: Optional[str]) -> None:
+    def __init__(
+        self,
+        content_type: Optional[str],
+        etag: Optional[str] = None,
+        last_modified: Optional[datetime] = None,
+    ) -> None:
         self.content_settings = _StubContentSettings(content_type)
+        self.etag = etag
+        self.last_modified = last_modified
 
 
 class _StubDownload:
@@ -58,18 +65,29 @@ class _StubDownload:
 
 class _StubBlobClient:
     def __init__(
-        self, name: str, data_map: Dict[str, bytes], content_types: Dict[str, str]
+        self,
+        name: str,
+        data_map: Dict[str, bytes],
+        content_types: Dict[str, str],
+        etag_map: Optional[Dict[str, str]] = None,
+        last_modified_map: Optional[Dict[str, datetime]] = None,
     ) -> None:
         self._name = name
         self._data_map = data_map
         self._content_types = content_types
+        self._etag_map = etag_map or {}
+        self._last_modified_map = last_modified_map or {}
         self.url = f"https://example.blob.core.windows.net/container/{name}"
 
     def get_blob_properties(self) -> _StubBlobProperties:
         if self._name not in self._data_map:
             raise ResourceNotFoundError(message="Blob not found")
         content_type = self._content_types.get(self._name)
-        return _StubBlobProperties(content_type)
+        return _StubBlobProperties(
+            content_type,
+            etag=self._etag_map.get(self._name),
+            last_modified=self._last_modified_map.get(self._name),
+        )
 
     def download_blob(self) -> _StubDownload:
         if self._name not in self._data_map:
@@ -83,10 +101,14 @@ class _StubContainerClient:
         blobs: Optional[List[_StubBlob]] = None,
         data_map: Optional[Dict[str, bytes]] = None,
         content_types: Optional[Dict[str, str]] = None,
+        etag_map: Optional[Dict[str, str]] = None,
+        last_modified_map: Optional[Dict[str, datetime]] = None,
     ) -> None:
         self._blobs = list(blobs or [])
         self._data_map = data_map or {}
         self._content_types = content_types or {}
+        self._etag_map = etag_map or {}
+        self._last_modified_map = last_modified_map or {}
         self.account_name = "acct"
         self.container_name = "container"
         self.last_prefix: Optional[str] = None
@@ -96,14 +118,25 @@ class _StubContainerClient:
         return list(self._blobs)
 
     def get_blob_client(self, name: str) -> _StubBlobClient:
-        return _StubBlobClient(name, self._data_map, self._content_types)
+        return _StubBlobClient(
+            name,
+            self._data_map,
+            self._content_types,
+            etag_map=self._etag_map,
+            last_modified_map=self._last_modified_map,
+        )
 
 
 def test_resolve_auth_level_defaults_and_validation() -> None:
     default = func.AuthLevel.FUNCTION
     assert function_app._resolve_auth_level(None, default) == default
-    assert function_app._resolve_auth_level("anonymous", default) == func.AuthLevel.ANONYMOUS
-    assert function_app._resolve_auth_level("FUNCTION", default) == func.AuthLevel.FUNCTION
+    assert (
+        function_app._resolve_auth_level("anonymous", default)
+        == func.AuthLevel.ANONYMOUS
+    )
+    assert (
+        function_app._resolve_auth_level("FUNCTION", default) == func.AuthLevel.FUNCTION
+    )
     assert function_app._resolve_auth_level("admin", default) == func.AuthLevel.ADMIN
     assert function_app._resolve_auth_level("unknown", default) == default
 
@@ -158,7 +191,7 @@ def test_list_blob_images_builds_payloads() -> None:
     ]
     container = _StubContainerClient(blobs=blobs)
 
-    items = function_app._list_blob_images(
+    items, latest_modified = function_app._list_blob_images(
         container,
         "processed",
         category="processed",
@@ -167,21 +200,26 @@ def test_list_blob_images_builds_payloads() -> None:
     )
 
     assert container.last_prefix == "processed/"
-    assert items[0]["last_modified"] == last_modified.isoformat()
+    assert items[0]["last_modified"] == function_app._format_rfc3339(last_modified)
     assert items[1]["last_modified"] is None
     assert str(items[0]["url"]).startswith("/api/gallery/image?")
+    assert latest_modified == last_modified
 
 
 def test_list_blob_images_filters_by_since() -> None:
     base_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
     blobs = [
         _StubBlob("processed/old.jpg", size=120, last_modified=base_time),
-        _StubBlob("processed/new.jpg", size=120, last_modified=base_time + timedelta(minutes=5)),
+        _StubBlob(
+            "processed/new.jpg",
+            size=120,
+            last_modified=base_time + timedelta(minutes=5),
+        ),
     ]
     container = _StubContainerClient(blobs=blobs)
     since = base_time + timedelta(minutes=1)
 
-    items = function_app._list_blob_images(
+    items, latest_modified = function_app._list_blob_images(
         container,
         "processed",
         category="processed",
@@ -191,6 +229,7 @@ def test_list_blob_images_filters_by_since() -> None:
     )
 
     assert [item["name"] for item in items] == ["processed/new.jpg"]
+    assert latest_modified == base_time + timedelta(minutes=5)
 
 
 def test_gallery_images_invalid_category_returns_400() -> None:
@@ -212,7 +251,9 @@ def test_gallery_images_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None
     last_modified = datetime(2025, 1, 1, tzinfo=timezone.utc)
     blobs = [_StubBlob("processed/a.jpg", size=5, last_modified=last_modified)]
     container = _StubContainerClient(blobs=blobs)
-    monkeypatch.setattr(function_app, "_get_container_client", lambda _: (None, container))
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
     monkeypatch.setattr(function_app, "GALLERY_USE_PUBLIC_URLS", False)
     req = _StubRequest(params={"category": "processed", "code": "abc"})
 
@@ -223,6 +264,7 @@ def test_gallery_images_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None
     assert payload["prefix"] == ""
     assert payload["blobs"][0]["name"] == "processed/a.jpg"
     assert payload["blobs"][0]["url"].startswith("/api/gallery/image?")
+    assert payload["next_since"] == function_app._format_rfc3339(last_modified)
 
 
 def test_gallery_page_contains_gallery_markup() -> None:
@@ -266,7 +308,9 @@ def test_gallery_image_blob_not_found_returns_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     container = _StubContainerClient(data_map={})
-    monkeypatch.setattr(function_app, "_get_container_client", lambda _: (None, container))
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
     resp = function_app.gallery_image(
         _StubRequest(params={"category": "processed", "name": "processed/missing.jpg"})
     )
@@ -277,14 +321,52 @@ def test_gallery_image_returns_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     blob_name = "processed/card.jpg"
     blob_data = {blob_name: b"image-bytes"}
     content_types = {blob_name: "image/jpeg"}
-    container = _StubContainerClient(data_map=blob_data, content_types=content_types)
-    monkeypatch.setattr(function_app, "_get_container_client", lambda _: (None, container))
+    etag_map = {blob_name: "etag-123"}
+    last_modified_map = {blob_name: datetime(2025, 1, 1, tzinfo=timezone.utc)}
+    container = _StubContainerClient(
+        data_map=blob_data,
+        content_types=content_types,
+        etag_map=etag_map,
+        last_modified_map=last_modified_map,
+    )
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
 
     resp = function_app.gallery_image(
         _StubRequest(params={"category": "processed", "name": blob_name})
     )
     assert resp.status_code == 200
     assert resp.get_body() == b"image-bytes"
+    assert resp.headers.get("ETag") == "etag-123"
+    assert resp.headers.get("Last-Modified") is not None
+
+
+def test_gallery_image_returns_304_when_etag_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blob_name = "processed/card.jpg"
+    blob_data = {blob_name: b"image-bytes"}
+    content_types = {blob_name: "image/jpeg"}
+    etag_map = {blob_name: "etag-123"}
+    last_modified_map = {blob_name: datetime(2025, 1, 1, tzinfo=timezone.utc)}
+    container = _StubContainerClient(
+        data_map=blob_data,
+        content_types=content_types,
+        etag_map=etag_map,
+        last_modified_map=last_modified_map,
+    )
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+
+    resp = function_app.gallery_image(
+        _StubRequest(
+            params={"category": "processed", "name": blob_name},
+            headers={"If-None-Match": "etag-123"},
+        )
+    )
+    assert resp.status_code == 304
 
 
 def test_health_returns_ok() -> None:
