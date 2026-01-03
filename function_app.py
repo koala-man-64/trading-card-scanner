@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Protocol, Tuple, Union
 from urllib.parse import urlencode
 
 import azure.functions as func
@@ -49,6 +49,31 @@ STORAGE_AUTH_MODE = (
     os.environ.get("STORAGE_AUTH_MODE", "connection_string").strip().lower()
 )
 STORAGE_ACCOUNT_URL = os.environ.get("STORAGE_ACCOUNT_URL")
+
+
+class _BlobClientUrl(Protocol):
+    url: str
+
+
+class _BlobListItem(Protocol):
+    name: str
+    size: int | None
+    last_modified: Optional[datetime]
+
+
+class _GalleryContainerClient(Protocol):
+    def get_blob_client(self, name: str) -> _BlobClientUrl:
+        ...
+
+    def list_blobs(
+        self, name_starts_with: Optional[str] = None
+    ) -> Iterable[_BlobListItem]:
+        ...
+
+
+class _UploadContainerClient(Protocol):
+    def upload_blob(self, name: str, data: bytes, *, overwrite: bool) -> object:
+        ...
 
 
 def _resolve_auth_level(
@@ -202,7 +227,7 @@ def _parse_since_param(value: Optional[str]) -> Optional[datetime]:
 
 
 def _build_gallery_image_url(
-    container_client: ContainerClient,
+    container_client: _GalleryContainerClient,
     blob_name: str,
     *,
     category: str,
@@ -219,7 +244,7 @@ def _build_gallery_image_url(
 
 
 def _list_blob_images(
-    container_client: ContainerClient,
+    container_client: _GalleryContainerClient,
     prefix: str,
     *,
     category: str,
@@ -306,7 +331,7 @@ def _build_processed_card_folder(source_name: str) -> str:
 
 
 def _upload_processed_cards(
-    processed_container: ContainerClient,
+    processed_container: _UploadContainerClient,
     source_name: str,
     cards: Iterable[Tuple[str, bytes]],
     folder: Optional[str] = None,
@@ -348,7 +373,7 @@ def _save_processed_cards_to_folder(
 
 
 def _process_blob_bytes(
-    source_name: str, blob_bytes: bytes, processed_container: ContainerClient
+    source_name: str, blob_bytes: bytes, processed_container: _UploadContainerClient
 ) -> None:
     """Run card processing pipeline for a blob and upload results."""
     cards = process_utils.extract_card_crops_from_image_bytes(blob_bytes)
