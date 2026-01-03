@@ -31,18 +31,18 @@ from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient
 
 import function_app
-from CardProcessor import process_utils
+from card_processor import process_utils
 from function_app import _upload_processed_cards
 
-from Tests.helpers import get_storage_connection
+from .helpers import get_storage_connection
 
 
-SAMPLES = Path(__file__).parent / "Samples"
+SAMPLES = Path(__file__).parent / "samples"
 INPUT_SAMPLES = SAMPLES / "input"
 
 
 def _read_sample(name: str, base_dir: Path) -> bytes:
-    # Test fixtures live under `Tests/Samples` (outputs) and `Tests/Samples/input`.
+    # Test fixtures live under `tests/samples` (outputs) and `tests/samples/input`.
     # These are used instead of placeholder bytes to better mimic production.
     path = base_dir / name
     if not path.exists():
@@ -126,23 +126,23 @@ def test_upload_processed_cards_builds_names_and_uploads():
     #
     # This test does not talk to Azure: `_StubContainer` captures upload calls.
     container = _StubContainer()
-    # Use real JPEG bytes from `Tests/Samples` to simulate actual images.
+    # Use real JPEG bytes from `tests/samples` to simulate actual images.
     cards = [
-        ("Charizard V", _read_output_sample("sample output 1.jpg")),
-        ("Unknown Hero", _read_output_sample("sample output 2.jpg")),
-        ("unknown", _read_output_sample("sample output 3.jpg")),
+        ("Charizard V", _read_output_sample("sample_output_1.jpg")),
+        ("Unknown Hero", _read_output_sample("sample_output_2.jpg")),
+        ("unknown", _read_output_sample("sample_output_3.jpg")),
     ]
     # The production naming code uses the basename of `source_name`, so we point at
     # a real sample input file to avoid "fake" paths.
-    source_path = str(INPUT_SAMPLES / "sample input 1.jpg")
+    source_path = str(INPUT_SAMPLES / "sample_input_1.jpg")
 
     _upload_processed_cards(container, source_path, cards)
 
     # Ensure the blob names are deterministic and sanitized.
     assert [name for name, *_ in container.uploads] == [
-        "sample input 1_1.jpg",
-        "sample input 1_2.jpg",
-        "sample input 1_3.jpg",
+        "sample_input_1_1.jpg",
+        "sample_input_1_2.jpg",
+        "sample_input_1_3.jpg",
     ]
     # `_upload_processed_cards` always sets overwrite=True so reruns replace blobs.
     assert all(overwrite for *_, overwrite in container.uploads)
@@ -157,17 +157,17 @@ def test_upload_processed_cards_builds_names_and_uploads():
 def test_upload_processed_cards_logs_and_continues_on_error(caplog):
     # Unit test: verify an upload exception is logged and does not stop later uploads.
     container = _FailingFirstUpload()
-    first_bytes = _read_output_sample("sample output 1.jpg")
-    second_bytes = _read_output_sample("sample output 2.jpg")
+    first_bytes = _read_output_sample("sample_output_1.jpg")
+    second_bytes = _read_output_sample("sample_output_2.jpg")
     cards = [("Card One", first_bytes), ("Card Two", second_bytes)]
-    source_path = str(INPUT_SAMPLES / "sample input 2.jpg")
+    source_path = str(INPUT_SAMPLES / "sample_input_2.jpg")
 
     with caplog.at_level(logging.ERROR):
         _upload_processed_cards(container, source_path, cards)
 
     # The first upload fails; the second should still succeed with idx=2 naming.
     assert "Failed to upload processed card Card One" in caplog.text
-    assert container.uploads == [("sample input 2_2.jpg", second_bytes, True)]
+    assert container.uploads == [("sample_input_2_2.jpg", second_bytes, True)]
 
 
 @pytest.mark.integration
@@ -206,22 +206,25 @@ def test_upload_processed_cards_writes_blobs_to_storage(
 
         # Upload two images into the output container using the production naming scheme.
         cards = [
-            ("Cloud Card", _read_output_sample("sample output 1.jpg")),
-            ("unknown", _read_output_sample("sample output 2.jpg")),
+            ("Cloud Card", _read_output_sample("sample_output_1.jpg")),
+            ("unknown", _read_output_sample("sample_output_2.jpg")),
         ]
-        source_path = str(INPUT_SAMPLES / "sample input 1.jpg")
+        source_path = str(INPUT_SAMPLES / "sample_input_1.jpg")
         _upload_processed_cards(container_client, source_path, cards, folder=folder)
 
         # Verify expected blob names are present.
         blobs = {
             blob.name for blob in container_client.list_blobs(name_starts_with=prefix)
         }
-        expected = {f"{prefix}sample input 1_1.jpg", f"{prefix}sample input 1_2.jpg"}
+        expected = {
+            f"{prefix}sample_input_1_1.jpg",
+            f"{prefix}sample_input_1_2.jpg",
+        }
         assert expected <= blobs
 
         # Verify one blob's content roundtrips correctly.
         downloaded = container_client.download_blob(
-            f"{prefix}sample input 1_1.jpg"
+            f"{prefix}sample_input_1_1.jpg"
         ).readall()
         assert downloaded == cards[0][1]
     finally:
@@ -275,7 +278,7 @@ def test_upload_parsing_results_to_input_container_under_card_folder(
             ) from exc
         cleanup_prefix = prefix
         # Parse cards from the sample input image.
-        input_bytes = _read_input_sample("sample input 1.jpg")
+        input_bytes = _read_input_sample("sample_input_1.jpg")
         crops = process_utils.extract_card_crops_from_image_bytes(input_bytes)
         assert crops, "Expected at least one parsed card crop from sample input"
 
@@ -284,7 +287,7 @@ def test_upload_parsing_results_to_input_container_under_card_folder(
         for idx, (name, img_bytes) in enumerate(crops[:3], 1):
             # Reuse the same naming helper as the app so blob names mirror production outputs.
             file_name = function_app._build_processed_card_name(
-                "sample input 1.jpg", idx
+                "sample_input_1.jpg", idx
             )
             blob_name = f"{prefix}{file_name}"
             input_container.upload_blob(

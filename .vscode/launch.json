@@ -5,15 +5,15 @@
       "name": "Test Retrieve (Azure Blob)",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/Tests/test_local.py",
+      "program": "${workspaceFolder}/tests/test_local.py",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
       "args": [
         "--input",
-        "${workspaceFolder}\\Tests\\Samples\\sample input 1.jpg",
+        "${workspaceFolder}\\tests\\samples\\input\\sample_input_1.jpg",
         "--output",
-        "${workspaceFolder}\\Tests\\Out"
+        "${workspaceFolder}\\tests\\out"
       ]
     },
     {

@@ -11,7 +11,7 @@ from ultralytics.engine.results import Boxes
 from .layout_types import RawDetection
 
 
-def _boxes_to_detections(boxes: Boxes) -> List[RawDetection]:
+def _boxes_to_detections(boxes: Boxes | None) -> List[RawDetection]:
     detections: List[RawDetection] = []
     if boxes is None:
         return detections

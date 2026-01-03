@@ -6,20 +6,29 @@ import os
 import re
 import uuid
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Protocol, Tuple, Union, cast
+from urllib.parse import urlencode
 
 import azure.functions as func
+from azure.core.exceptions import ResourceNotFoundError
+from azure.core.paging import ItemPaged
 from azure.storage.blob import (
-    BlobSasPermissions,
+    BlobClient,
     BlobServiceClient,
     ContainerClient,
-    generate_blob_sas,
 )
 
-from CardProcessor import process_utils
-from CardProcessor.layout_analysis import analyze_layout_from_image_bytes
+from card_processor import process_utils
+from card_processor.layout_analysis import analyze_layout_from_image_bytes
+
+try:
+    from azure.identity import DefaultAzureCredential
+except ImportError:
+    DefaultAzureCredential = None  # type: ignore
 
 app = func.FunctionApp()
 
@@ -29,10 +38,76 @@ INPUT_CONTAINER_NAME = os.environ.get("INPUT_CONTAINER_NAME", "input")
 GALLERY_CONTAINER_NAME = os.environ.get(
     "GALLERY_CONTAINER_NAME", PROCESSED_CONTAINER_NAME
 )
-GALLERY_RAW_PREFIX = os.environ.get("GALLERY_RAW_PREFIX", "raw")
+GALLERY_INPUT_PREFIX = os.environ.get("GALLERY_INPUT_PREFIX", "input")
 GALLERY_PROCESSED_PREFIX = os.environ.get("GALLERY_PROCESSED_PREFIX", "processed")
 GALLERY_SEGMENTED_PREFIX = os.environ.get("GALLERY_SEGMENTED_PREFIX", "segmented")
-GALLERY_REFRESH_SECONDS = float(os.environ.get("GALLERY_REFRESH_SECONDS", "12000"))
+GALLERY_REFRESH_SECONDS = float(os.environ.get("GALLERY_REFRESH_SECONDS", "5"))
+GALLERY_USE_PUBLIC_URLS = os.environ.get(
+    "GALLERY_USE_PUBLIC_URLS", ""
+).strip().lower() in {"1", "true", "yes", "on"}
+GALLERY_TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "gallery.html"
+GALLERY_REFRESH_TOKEN = "__GALLERY_REFRESH_SECONDS__"
+STORAGE_AUTH_MODE = (
+    os.environ.get("STORAGE_AUTH_MODE", "connection_string").strip().lower()
+)
+STORAGE_ACCOUNT_URL = os.environ.get("STORAGE_ACCOUNT_URL")
+
+
+class _BlobClientUrl(Protocol):
+    url: str
+
+
+class _BlobListItem(Protocol):
+    name: str
+    size: int | None
+    last_modified: Optional[datetime]
+
+
+class _GalleryContainerClient(Protocol):
+    def get_blob_client(
+        self,
+        blob: str,
+        snapshot: Optional[str] = None,
+        *,
+        version_id: Optional[str] = None,
+    ) -> _BlobClientUrl | BlobClient: ...
+
+    def list_blobs(
+        self,
+        name_starts_with: Optional[str] = None,
+        include: str | list[str] | None = None,
+        *,
+        timeout: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Iterable[_BlobListItem] | ItemPaged[Any]: ...
+
+
+class _UploadContainerClient(Protocol):
+    def upload_blob(self, name: str, data: bytes, *, overwrite: bool) -> object: ...
+
+
+def _resolve_auth_level(
+    value: Optional[str], default: func.AuthLevel
+) -> func.AuthLevel:
+    if not value:
+        return default
+    normalized = value.strip().upper()
+    if normalized in {"ANONYMOUS", "FUNCTION", "ADMIN"}:
+        return getattr(func.AuthLevel, normalized)
+    logging.warning("Unknown auth level '%s'; defaulting to %s", value, default)
+    return default
+
+
+DEFAULT_AUTH_LEVEL = _resolve_auth_level(
+    os.environ.get("HTTP_AUTH_LEVEL"), func.AuthLevel.FUNCTION
+)
+GALLERY_AUTH_LEVEL = _resolve_auth_level(
+    os.environ.get("GALLERY_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
+)
+
+HEALTH_AUTH_LEVEL = _resolve_auth_level(
+    os.environ.get("HEALTH_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
+)
 
 
 def _get_storage_clients() -> Tuple[
@@ -54,6 +129,28 @@ def _get_storage_clients() -> Tuple[
 
 
 def _get_storage_service_client() -> Optional[BlobServiceClient]:
+    if STORAGE_AUTH_MODE in {"managed_identity", "aad"}:
+        if not STORAGE_ACCOUNT_URL:
+            logging.error(
+                "STORAGE_ACCOUNT_URL is required for managed identity storage access"
+            )
+            return None
+        if DefaultAzureCredential is None:
+            logging.error(
+                "azure-identity is not installed; cannot use managed identity"
+            )
+            return None
+        try:
+            credential = DefaultAzureCredential()
+            return BlobServiceClient(
+                account_url=STORAGE_ACCOUNT_URL, credential=credential
+            )
+        except Exception as exc:
+            logging.error(
+                "Failed to create blob service client with managed identity: %s", exc
+            )
+            return None
+
     connection = os.environ.get("AzureWebJobsStorage")
     if not connection:
         logging.error("AzureWebJobsStorage connection string not found in environment")
@@ -85,61 +182,152 @@ def _get_container_client(
         return None, None
 
 
-def _extract_account_key(connection: Optional[str]) -> Optional[str]:
-    if not connection:
-        return None
-
-    for part in connection.split(";"):
-        if part.lower().startswith("accountkey="):
-            return part.split("=", 1)[1]
-    return None
-
-
 def _normalize_prefix(prefix: str) -> str:
     cleaned = prefix.strip().strip("/")
     return f"{cleaned}/" if cleaned else ""
 
 
-def _build_blob_url(
-    container_client: ContainerClient, blob_name: str, account_key: Optional[str]
+@lru_cache(maxsize=1)
+def _load_gallery_template() -> Optional[str]:
+    try:
+        return GALLERY_TEMPLATE_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        logging.error("Gallery template not found at %s", GALLERY_TEMPLATE_PATH)
+    except Exception as exc:
+        logging.error(
+            "Failed to read gallery template at %s: %s", GALLERY_TEMPLATE_PATH, exc
+        )
+    return None
+
+
+def _render_gallery_page(refresh_seconds: float) -> Optional[str]:
+    template = _load_gallery_template()
+    if not template:
+        return None
+    return template.replace(GALLERY_REFRESH_TOKEN, str(refresh_seconds))
+
+
+def _format_rfc3339(value: datetime) -> str:
+    normalized = value.astimezone(timezone.utc)
+    formatted = normalized.isoformat(timespec="milliseconds")
+    return formatted.replace("+00:00", "Z")
+
+
+def _format_http_datetime(value: datetime) -> str:
+    normalized = value.astimezone(timezone.utc)
+    return normalized.strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+
+def _parse_since_param(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if cleaned.endswith("Z"):
+        cleaned = f"{cleaned[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(cleaned)
+    except ValueError:
+        logging.warning("Invalid since parameter '%s'; ignoring.", value)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _build_gallery_image_url(
+    container_client: _GalleryContainerClient,
+    blob_name: str,
+    *,
+    category: str,
+    auth_code: Optional[str],
+    use_public_urls: bool,
 ) -> str:
-    blob_client = container_client.get_blob_client(blob_name)
-    base_url = blob_client.url
+    if use_public_urls:
+        blob_client = cast(_BlobClientUrl, container_client.get_blob_client(blob_name))
+        return blob_client.url
 
-    if not account_key:
-        return base_url
-
-    sas_token = generate_blob_sas(
-        account_name=container_client.account_name,
-        container_name=container_client.container_name,
-        blob_name=blob_name,
-        account_key=account_key,
-        permission=BlobSasPermissions(read=True),
-        expiry=datetime.now(timezone.utc) + timedelta(hours=1),
-    )
-    return f"{base_url}?{sas_token}"
+    params = {"name": blob_name, "category": category}
+    if auth_code:
+        params["code"] = auth_code
+    return f"/api/gallery/image?{urlencode(params)}"
 
 
 def _list_blob_images(
-    container_client: ContainerClient, prefix: str, account_key: Optional[str]
-) -> List[Dict[str, object]]:
+    container_client: _GalleryContainerClient,
+    prefix: str,
+    *,
+    category: str,
+    auth_code: Optional[str],
+    use_public_urls: bool,
+    since: Optional[datetime] = None,
+) -> Tuple[List[Dict[str, object]], Optional[datetime]]:
     blobs = []
     normalized_prefix = _normalize_prefix(prefix)
-    for blob in container_client.list_blobs(name_starts_with=normalized_prefix):
+    latest_modified: Optional[datetime] = None
+    blobs_iter = cast(
+        Iterable[_BlobListItem],
+        container_client.list_blobs(name_starts_with=normalized_prefix),
+    )
+    for blob in blobs_iter:
+        blob_modified = getattr(blob, "last_modified", None)
+        blob_modified_utc = (
+            blob_modified.astimezone(timezone.utc) if blob_modified else None
+        )
+        if since and blob_modified_utc and blob_modified_utc < since:
+            continue
+        if blob_modified_utc and (
+            latest_modified is None or blob_modified_utc > latest_modified
+        ):
+            latest_modified = blob_modified_utc
         last_modified = (
-            blob.last_modified.astimezone(timezone.utc).isoformat()
-            if getattr(blob, "last_modified", None)
-            else None
+            _format_rfc3339(blob_modified_utc) if blob_modified_utc else None
         )
         blobs.append(
             {
                 "name": blob.name,
                 "size": blob.size or 0,
                 "last_modified": last_modified,
-                "url": _build_blob_url(container_client, blob.name, account_key),
+                "url": _build_gallery_image_url(
+                    container_client,
+                    blob.name,
+                    category=category,
+                    auth_code=auth_code,
+                    use_public_urls=use_public_urls,
+                ),
             }
         )
-    return blobs
+    return blobs, latest_modified
+
+
+def _is_not_modified(
+    req: func.HttpRequest,
+    *,
+    etag: Optional[str],
+    last_modified: Optional[datetime],
+) -> bool:
+    if etag:
+        if_none_match = req.headers.get("If-None-Match")
+        if if_none_match and if_none_match.strip() == etag:
+            return True
+
+    if last_modified:
+        if_modified_since = req.headers.get("If-Modified-Since")
+        if if_modified_since:
+            try:
+                parsed_since = parsedate_to_datetime(if_modified_since)
+            except (TypeError, ValueError):
+                parsed_since = None
+            if parsed_since is not None:
+                if parsed_since.tzinfo is None:
+                    parsed_since = parsed_since.replace(tzinfo=timezone.utc)
+                if last_modified.astimezone(timezone.utc) <= parsed_since.astimezone(
+                    timezone.utc
+                ):
+                    return True
+
+    return False
 
 
 def _build_processed_card_name(source_name: str, idx: int) -> str:
@@ -158,7 +346,7 @@ def _build_processed_card_folder(source_name: str) -> str:
 
 
 def _upload_processed_cards(
-    processed_container: ContainerClient,
+    processed_container: _UploadContainerClient,
     source_name: str,
     cards: Iterable[Tuple[str, bytes]],
     folder: Optional[str] = None,
@@ -200,7 +388,7 @@ def _save_processed_cards_to_folder(
 
 
 def _process_blob_bytes(
-    source_name: str, blob_bytes: bytes, processed_container: ContainerClient
+    source_name: str, blob_bytes: bytes, processed_container: _UploadContainerClient
 ) -> None:
     """Run card processing pipeline for a blob and upload results."""
     cards = process_utils.extract_card_crops_from_image_bytes(blob_bytes)
@@ -249,47 +437,65 @@ def _sanitize_zip_member_name(value: str) -> str:
 
 def _gallery_prefix_for_category(category: str) -> Optional[str]:
     normalized = category.strip().lower()
-    if normalized == "raw":
-        return GALLERY_RAW_PREFIX
+    if normalized == "input":
+        return GALLERY_INPUT_PREFIX
     if normalized == "processed":
-        return GALLERY_PROCESSED_PREFIX
+        prefix = (GALLERY_PROCESSED_PREFIX or "").strip()
+        if prefix.lower() in {"", "root", "all", "*"}:
+            return ""
+        container_name = (GALLERY_CONTAINER_NAME or "").strip().lower()
+        if prefix.strip("/").lower() == container_name:
+            return ""
+        return prefix
     if normalized == "segmented":
         return GALLERY_SEGMENTED_PREFIX
     return None
 
 
 @app.function_name(name="GalleryImages")
-@app.route(route="gallery/images", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="gallery/images", methods=["GET"], auth_level=GALLERY_AUTH_LEVEL)
 def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
     """Return JSON listing of blobs for the requested gallery category."""
     category = (req.params.get("category") or "processed").strip().lower()
     prefix = _gallery_prefix_for_category(category)
     if prefix is None:
         return func.HttpResponse(
-            "Unsupported category. Use raw, processed, or segmented.",
+            "Unsupported category. Use input, processed, or segmented.",
             status_code=400,
         )
 
-    service_client, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
+    _, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
     if not container_client:
         return func.HttpResponse(
             "Storage is not configured. Set AzureWebJobsStorage.", status_code=500
         )
 
-    account_key = _extract_account_key(os.environ.get("AzureWebJobsStorage"))
+    auth_code = req.params.get("code")
+    since = _parse_since_param(req.params.get("since"))
+    gallery_container = cast(_GalleryContainerClient, container_client)
     try:
-        blobs = _list_blob_images(container_client, prefix, account_key)
+        blobs, latest_modified = _list_blob_images(
+            gallery_container,
+            prefix,
+            category=category,
+            auth_code=auth_code,
+            use_public_urls=GALLERY_USE_PUBLIC_URLS,
+            since=since,
+        )
     except Exception as exc:
         logging.error("Failed to list blobs for gallery: %s", exc)
         return func.HttpResponse("Failed to list images.", status_code=500)
 
+    refreshed_at = datetime.now(timezone.utc)
+    next_since = latest_modified or since or refreshed_at
     payload = {
         "container": container_client.container_name,
         "category": category,
         "prefix": _normalize_prefix(prefix),
         "blobs": blobs,
-        "refreshed_at": datetime.now(timezone.utc).isoformat(),
+        "refreshed_at": _format_rfc3339(refreshed_at),
         "refresh_seconds": GALLERY_REFRESH_SECONDS,
+        "next_since": _format_rfc3339(next_since),
     }
     return func.HttpResponse(
         body=json.dumps(payload), status_code=200, mimetype="application/json"
@@ -297,269 +503,78 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.function_name(name="GalleryPage")
-@app.route(route="gallery", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="gallery", methods=["GET"], auth_level=GALLERY_AUTH_LEVEL)
 def gallery_page(req: func.HttpRequest) -> func.HttpResponse:
     """Serve a minimal gallery UI for browsing card images."""
-    html = f"""
-    <!doctype html>
-    <html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Trading Card Gallery</title>
-        <style>
-            :root {{ color-scheme: light dark; }}
-            * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                background: #0b0c10;
-                color: #e5e7eb;
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
-            }}
-            header {{
-                position: sticky;
-                top: 0;
-                z-index: 10;
-                background: rgba(15, 17, 26, 0.9);
-                backdrop-filter: blur(6px);
-                border-bottom: 1px solid #1f2937;
-                padding: 12px 16px;
-                display: flex;
-                gap: 12px;
-                align-items: center;
-            }}
-            h1 {{ font-size: 18px; font-weight: 600; margin-right: auto; }}
-            .tab {{
-                border: 1px solid #1f2937;
-                background: #111827;
-                color: #e5e7eb;
-                padding: 8px 14px;
-                border-radius: 10px;
-                cursor: pointer;
-                transition: all 0.15s ease;
-                text-transform: capitalize;
-            }}
-            .tab:hover {{ border-color: #2563eb; color: #bfdbfe; }}
-            .tab.active {{
-                background: linear-gradient(135deg, #2563eb, #9333ea);
-                border-color: transparent;
-                color: white;
-                box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35);
-            }}
-            .status {{
-                margin-left: 8px;
-                font-size: 13px;
-                color: #9ca3af;
-            }}
-            main {{
-                flex: 1;
-                overflow-y: auto;
-                padding: 18px;
-            }}
-            .gallery {{
-                display: flex;
-                flex-direction: column;
-                gap: 16px;
-            }}
-            .folder {{
-                background: #0f1628;
-                border: 1px solid #1f2937;
-                border-radius: 12px;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-                overflow: hidden;
-            }}
-            .folder-header {{
-                padding: 12px;
-                display: flex;
-                align-items: baseline;
-                gap: 8px;
-            }}
-            .folder-title {{
-                font-size: 15px;
-                font-weight: 600;
-                color: #e5e7eb;
-            }}
-            .folder-count {{
-                color: #9ca3af;
-                font-size: 12px;
-            }}
-            .grid {{
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-                gap: 16px;
-            }}
-            .card {{
-                background: #0f172a;
-                border: 1px solid #1f2937;
-                border-radius: 12px;
-                overflow: hidden;
-                display: flex;
-                flex-direction: column;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-                transition: transform 0.12s ease, box-shadow 0.12s ease;
-            }}
-            .card:hover {{
-                transform: translateY(-2px);
-                box-shadow: 0 14px 36px rgba(0,0,0,0.45);
-            }}
-            .thumb {{
-                background: #0b1220;
-                padding: 8px;
-                display: grid;
-                place-items: center;
-                min-height: 240px;
-            }}
-            .thumb img {{
-                width: 100%;
-                height: 100%;
-                object-fit: contain;
-                border-radius: 8px;
-                background: #111827;
-            }}
-            .meta {{
-                padding: 12px;
-                display: flex;
-                flex-direction: column;
-                gap: 6px;
-            }}
-            .empty {{
-                text-align: center;
-                padding: 20px;
-                border: 1px dashed #1f2937;
-                border-radius: 12px;
-                color: #9ca3af;
-                background: #0f172a;
-            }}
-            .name {{ font-weight: 600; color: #e5e7eb; font-size: 14px; }}
-            .details {{ color: #9ca3af; font-size: 12px; }}
-            @media (max-width: 640px) {{
-                header {{ flex-wrap: wrap; gap: 8px; }}
-                h1 {{ width: 100%; margin-bottom: 6px; }}
-            }}
-        </style>
-    </head>
-    <body>
-        <header>
-            <h1>Card Gallery</h1>
-            <button class="tab" data-category="raw">Raw</button>
-            <button class="tab" data-category="processed">Processed</button>
-            <button class="tab" data-category="segmented">Segmented</button>
-            <div class="status" id="status"></div>
-        </header>
-        <main>
-            <div class="gallery" id="gallery"></div>
-        </main>
-        <script>
-            const refreshSeconds = {GALLERY_REFRESH_SECONDS};
-            const defaultCategory = "processed";
-            let currentCategory = defaultCategory;
-            const galleryEl = document.getElementById("gallery");
-            const statusEl = document.getElementById("status");
-
-            function formatBytes(bytes) {{
-                if (!bytes) return "0 KB";
-                const kb = bytes / 1024;
-                if (kb < 1024) return `${{Math.round(kb)}} KB`;
-                return `${{(kb / 1024).toFixed(2)}} MB`;
-            }}
-
-            function setActiveTab(category) {{
-                document.querySelectorAll(".tab").forEach((btn) => {{
-                    btn.classList.toggle("active", btn.dataset.category === category);
-                }});
-            }}
-
-            function normalizeRelativeName(name, prefix) {{
-                const normalizedPrefix = prefix || "";
-                if (normalizedPrefix && name.startsWith(normalizedPrefix)) {{
-                    return name.slice(normalizedPrefix.length);
-                }}
-                return name;
-            }}
-
-            function groupByFolder(blobs, prefix) {{
-                const folders = new Map();
-                blobs.forEach((blob) => {{
-                    const relativeName = normalizeRelativeName(blob.name || "", prefix);
-                    const parts = relativeName.split("/").filter(Boolean);
-                    const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : "root";
-                    if (!folders.has(folder)) {{
-                        folders.set(folder, []);
-                    }}
-                    folders.get(folder).push(blob);
-                }});
-                return Array.from(folders.entries()).map(([folder, items]) => ({{
-                    folder,
-                    items,
-                }}));
-            }}
-
-            function renderFolders(groups) {{
-                if (!groups.length) {{
-                    return `<div class="empty">No images found for this category.</div>`;
-                }}
-
-                return groups.map((group) => {{
-                    const cards = group.items.map((blob) => `
-                        <article class="card">
-                            <div class="thumb">
-                                <img loading="lazy" src="${{blob.url}}" alt="${{blob.name}}" />
-                            </div>
-                            <div class="meta">
-                                <div class="name" title="${{blob.name}}">${{blob.name}}</div>
-                                <div class="details">${{formatBytes(blob.size)}} • ${{blob.last_modified || ""}}</div>
-                            </div>
-                        </article>
-                    `).join("");
-                    return `
-                        <section class="folder">
-                            <div class="folder-header">
-                                <div class="folder-title" title="${{group.folder}}">${{group.folder}}</div>
-                                <div class="folder-count">${{group.items.length}} image(s)</div>
-                            </div>
-                            <div class="grid">
-                                ${{cards}}
-                            </div>
-                        </section>
-                    `;
-                }}).join("");
-            }}
-
-            async function loadGallery(category) {{
-                currentCategory = category;
-                setActiveTab(category);
-                statusEl.textContent = "Loading...";
-                try {{
-                    const response = await fetch(`/api/gallery/images?category=${{encodeURIComponent(category)}}`, {{ cache: "no-store" }});
-                    if (!response.ok) throw new Error(`Request failed: ${{response.status}}`);
-                    const payload = await response.json();
-                    const blobs = Array.isArray(payload.blobs) ? payload.blobs : [];
-                    const groups = groupByFolder(blobs, payload.prefix || "");
-                    galleryEl.innerHTML = renderFolders(groups);
-                    statusEl.textContent = `${{blobs.length}} image(s) across ${{groups.length}} folder(s) • Updated ${{new Date().toLocaleTimeString()}}`;
-                }} catch (err) {{
-                    console.error(err);
-                    statusEl.textContent = `Error: ${{err.message}}`;
-                }}
-            }}
-
-            document.querySelectorAll(".tab").forEach((btn) => {{
-                btn.addEventListener("click", () => loadGallery(btn.dataset.category));
-            }});
-
-            loadGallery(defaultCategory);
-            setInterval(() => loadGallery(currentCategory), refreshSeconds * 1000);
-        </script>
-    </body>
-    </html>
-    """
+    html = _render_gallery_page(GALLERY_REFRESH_SECONDS)
+    if not html:
+        return func.HttpResponse(
+            "Gallery template is unavailable.", status_code=500, mimetype="text/plain"
+        )
     return func.HttpResponse(html, status_code=200, mimetype="text/html")
 
 
+@app.function_name(name="GalleryImage")
+@app.route(route="gallery/image", methods=["GET"], auth_level=GALLERY_AUTH_LEVEL)
+def gallery_image(req: func.HttpRequest) -> func.HttpResponse:
+    """Serve a single blob image for gallery browsing."""
+    name = (req.params.get("name") or "").strip()
+    if not name:
+        return func.HttpResponse("Missing blob name.", status_code=400)
+
+    category = (req.params.get("category") or "processed").strip().lower()
+    prefix = _gallery_prefix_for_category(category)
+    if prefix is None:
+        return func.HttpResponse(
+            "Unsupported category. Use input, processed, or segmented.",
+            status_code=400,
+        )
+
+    normalized_prefix = _normalize_prefix(prefix)
+    if normalized_prefix and not name.startswith(normalized_prefix):
+        return func.HttpResponse(
+            "Blob name does not match category prefix.", status_code=400
+        )
+
+    _, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
+    if not container_client:
+        return func.HttpResponse(
+            "Storage is not configured. Set AzureWebJobsStorage.", status_code=500
+        )
+
+    blob_client = container_client.get_blob_client(name)
+    try:
+        props = blob_client.get_blob_properties()
+        content_type = props.content_settings.content_type or "application/octet-stream"
+        etag = props.etag
+        last_modified = getattr(props, "last_modified", None)
+        if _is_not_modified(req, etag=etag, last_modified=last_modified):
+            headers = {"Cache-Control": "public, max-age=60"}
+            if etag:
+                headers["ETag"] = etag
+            if last_modified:
+                headers["Last-Modified"] = _format_http_datetime(last_modified)
+            return func.HttpResponse(status_code=304, headers=headers)
+
+        data = blob_client.download_blob().readall()
+    except ResourceNotFoundError:
+        return func.HttpResponse("Blob not found.", status_code=404)
+    except Exception as exc:
+        logging.error("Failed to download blob %s: %s", name, exc)
+        return func.HttpResponse("Failed to download image.", status_code=500)
+
+    headers = {"Cache-Control": "public, max-age=60"}
+    if etag:
+        headers["ETag"] = etag
+    if last_modified:
+        headers["Last-Modified"] = _format_http_datetime(last_modified)
+    return func.HttpResponse(
+        body=data, status_code=200, mimetype=content_type, headers=headers
+    )
+
+
 @app.function_name(name="Health")
-@app.route(route="health", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="health", methods=["GET"], auth_level=HEALTH_AUTH_LEVEL)
 def health(req: func.HttpRequest) -> func.HttpResponse:
     """Simple health endpoint for Postman/smoke tests."""
     return func.HttpResponse("OK", status_code=200)
@@ -572,7 +587,7 @@ def _parse_bool_param(value: Optional[str], *, default: bool) -> bool:
 
 
 @app.function_name(name="AnalyzeLayout")
-@app.route(route="layout", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="layout", methods=["POST"], auth_level=DEFAULT_AUTH_LEVEL)
 def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
     """Run document layout analysis on uploaded image bytes."""
     image_bytes = req.get_body() or b""
@@ -632,7 +647,7 @@ def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.function_name(name="ProcessImage")
-@app.route(route="process", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="process", methods=["POST"], auth_level=DEFAULT_AUTH_LEVEL)
 def process_image(req: func.HttpRequest) -> func.HttpResponse:
     """Process an uploaded image and optionally return/upload detected card crops.
 

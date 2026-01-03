@@ -3,7 +3,7 @@ import os
 import pytest
 from azure.storage.blob import BlobServiceClient
 
-from Tests.helpers import get_storage_connection
+from .helpers import get_storage_connection
 
 
 def test_local_settings_sets_azure_storage(monkeypatch: pytest.MonkeyPatch) -> None:
