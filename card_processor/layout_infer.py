@@ -1,48 +1,52 @@
-"""Inference helpers for document layout detection."""
+"""Inference helpers for DETR-based object detection."""
 
 from __future__ import annotations
 
+import os
 from typing import List
 
+import torch
 from PIL import Image
-from ultralytics import YOLO
-from ultralytics.engine.results import Boxes
+
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_TORCH", "1")
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
+
+from transformers import DetrForObjectDetection, DetrImageProcessor
 
 from .layout_types import RawDetection
 
 
-def _boxes_to_detections(boxes: Boxes | None) -> List[RawDetection]:
-    detections: List[RawDetection] = []
-    if boxes is None:
-        return detections
+def infer_layout(
+    model: DetrForObjectDetection,
+    processor: DetrImageProcessor,
+    img: Image.Image,
+    *,
+    conf: float,
+) -> List[RawDetection]:
+    """Run DETR inference and return raw detections."""
+    device = next(model.parameters()).device
+    inputs = processor(images=img, return_tensors="pt")
+    inputs = inputs.to(device)
+    with torch.no_grad():
+        outputs = model(**inputs)
 
-    for xyxy, conf, cls_idx in zip(boxes.xyxy, boxes.conf, boxes.cls):
-        x1, y1, x2, y2 = xyxy.tolist()
+    target_sizes = torch.tensor([[img.height, img.width]], device=device)
+    results = processor.post_process_object_detection(
+        outputs, threshold=conf, target_sizes=target_sizes
+    )
+
+    detections: List[RawDetection] = []
+    for score, label, box in zip(
+        results[0]["scores"], results[0]["labels"], results[0]["boxes"]
+    ):
+        x1, y1, x2, y2 = box.tolist()
         detections.append(
             RawDetection(
-                label=str(int(cls_idx.item())),
-                confidence=float(conf.item()),
+                label=str(int(label.item())),
+                confidence=float(score.item()),
                 bbox_xyxy=(float(x1), float(y1), float(x2), float(y2)),
             )
         )
-    return detections
-
-
-def infer_layout(
-    model: YOLO, img: Image.Image, *, imgsz: int, conf: float, iou: float
-) -> List[RawDetection]:
-    """Run YOLO inference and return raw detections."""
-    results = model.predict(img, imgsz=imgsz, conf=conf, iou=iou, verbose=False)
-    detections: List[RawDetection] = []
-    for res in results:
-        boxes = res.boxes
-        res_dets = _boxes_to_detections(boxes)
-        names = res.names or model.names
-        if names:
-            for det in res_dets:
-                try:
-                    det.label = str(names[int(det.label)])
-                except Exception:
-                    pass
-        detections.extend(res_dets)
     return detections

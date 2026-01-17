@@ -596,7 +596,10 @@ def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
             "Provide image bytes in the request body.", status_code=400
         )
 
-    model_variant = (req.params.get("model_variant") or "nano").strip().lower()
+    model_id = (req.params.get("model_id") or "").strip()
+    model_variant = (req.params.get("model_variant") or "").strip().lower()
+    if model_id:
+        model_variant = model_id
     imgsz = int(req.params.get("imgsz") or 1280)
     conf = float(req.params.get("conf") or 0.25)
     iou = float(req.params.get("iou") or 0.5)

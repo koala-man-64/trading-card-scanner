@@ -4,8 +4,12 @@ azure-storage-blob
 opencv-python
 numpy
 Pillow
-ultralytics
 huggingface-hub
+torch
+transformers
+timm
+# TODO: Remove ultralytics once DETR rollout is stable.
+ultralytics
 
 # Dev/test dependencies
 pytest

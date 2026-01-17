@@ -12,7 +12,7 @@ NormalizedBBox = Tuple[float, float, float, float]
 
 @dataclass
 class RawDetection:
-    """Raw detection output from a YOLO model before post-processing."""
+    """Raw detection output from an object detection model before post-processing."""
 
     label: str
     confidence: float

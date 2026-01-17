@@ -1,50 +1,72 @@
-"""Model resolution and caching for YOLO11 document layout detection."""
+"""Model resolution and caching for DETR-based card detection."""
 
 from __future__ import annotations
 
+import os
 import threading
-from typing import Dict
+from dataclasses import dataclass
+from typing import Dict, Optional
 
-from huggingface_hub import hf_hub_download
-from ultralytics import YOLO
+import torch
 
-_MODEL_FILENAMES: Dict[str, str] = {
-    "nano": "yolo11n_doc_layout.pt",
-    "small": "yolo11s_doc_layout.pt",
-    "medium": "yolo11m_doc_layout.pt",
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_TORCH", "1")
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
+
+from transformers import DetrForObjectDetection, DetrImageProcessor
+
+DEFAULT_MODEL_ID = "Matthieu68857/pokemon-cards-detection"
+
+_MODEL_ALIASES: Dict[str, str] = {
+    "nano": DEFAULT_MODEL_ID,
+    "small": DEFAULT_MODEL_ID,
+    "medium": DEFAULT_MODEL_ID,
 }
 
-_MODEL_CACHE: Dict[str, YOLO] = {}
+_MODEL_CACHE: Dict[str, "ModelBundle"] = {}
 _MODEL_LOCK = threading.Lock()
 
 
-class UnknownVariantError(ValueError):
-    """Raised when an unsupported model variant is requested."""
+@dataclass(frozen=True)
+class ModelBundle:
+    """Grouped model assets for inference."""
+
+    model: DetrForObjectDetection
+    processor: DetrImageProcessor
+    device: torch.device
+    model_id: str
 
 
-def resolve_model_path(variant: str) -> str:
-    """Return the local path for the requested model variant, downloading if needed."""
-    filename = _MODEL_FILENAMES.get(variant)
-    if not filename:
-        raise UnknownVariantError(
-            f"Unsupported model_variant '{variant}'. "
-            f"Choose from: {', '.join(sorted(_MODEL_FILENAMES))}."
-        )
-    return hf_hub_download(
-        repo_id="Armaggheddon/yolo11-document-layout", filename=filename
-    )
+def resolve_model_id(model_variant: Optional[str]) -> str:
+    """Resolve a model alias to a Hugging Face model id."""
+    if not model_variant:
+        return DEFAULT_MODEL_ID
+    normalized = model_variant.strip()
+    alias = _MODEL_ALIASES.get(normalized.lower())
+    return alias or normalized
 
 
-def get_model(variant: str) -> YOLO:
-    """Return a cached YOLO model instance for the requested variant."""
-    variant = variant.lower()
-    if variant in _MODEL_CACHE:
-        return _MODEL_CACHE[variant]
+def _resolve_device() -> torch.device:
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def get_model(model_variant: Optional[str] = None) -> ModelBundle:
+    """Return a cached DETR model + processor bundle."""
+    model_id = resolve_model_id(model_variant)
+    if model_id in _MODEL_CACHE:
+        return _MODEL_CACHE[model_id]
 
     with _MODEL_LOCK:
-        if variant in _MODEL_CACHE:
-            return _MODEL_CACHE[variant]
-        model_path = resolve_model_path(variant)
-        model = YOLO(model_path)
-        _MODEL_CACHE[variant] = model
-        return model
+        if model_id in _MODEL_CACHE:
+            return _MODEL_CACHE[model_id]
+        device = _resolve_device()
+        model = DetrForObjectDetection.from_pretrained(model_id)
+        model.to(device)
+        model.eval()
+        processor = DetrImageProcessor.from_pretrained(model_id)
+        bundle = ModelBundle(
+            model=model, processor=processor, device=device, model_id=model_id
+        )
+        _MODEL_CACHE[model_id] = bundle
+        return bundle

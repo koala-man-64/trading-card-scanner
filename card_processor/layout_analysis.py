@@ -1,39 +1,45 @@
-"""Document layout analysis pipeline using Hugging Face YOLO11 model."""
+"""Document layout analysis pipeline using a DETR-based card detector."""
 
 from __future__ import annotations
 
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 from .image_io import load_rgb_image
 from .layout_crops import attach_crops
 from .layout_infer import infer_layout
-from .layout_model import UnknownVariantError, get_model
+from .layout_model import get_model
 from .layout_post import assign_reading_order, to_layout_elements
 from .layout_types import LayoutAnalysisResult
 
 logger = logging.getLogger(__name__)
 
-# Model class mapping from the YOLO dataset
-_CLASS_MAP: Dict[str, str] = {
-    "0": "Text",
-    "1": "Title",
-    "2": "Section-header",
-    "3": "Table",
-    "4": "Picture",
-    "5": "Caption",
-    "6": "List-item",
-    "7": "Formula",
-    "8": "Page-header",
-    "9": "Page-footer",
-    "10": "Footnote",
-}
+
+def _normalize_label(label: str) -> str:
+    normalized = label.strip()
+    if not normalized:
+        return "Card"
+    lower = normalized.lower()
+    if "card" in lower or lower == "prediction":
+        return "Card"
+    return normalized
+
+
+def _build_class_map(model) -> Dict[str, str]:
+    id2label = getattr(model.config, "id2label", None)
+    if isinstance(id2label, dict) and id2label:
+        if len(id2label) == 1:
+            return {str(key): "Card" for key in id2label}
+        return {
+            str(key): _normalize_label(str(value)) for key, value in id2label.items()
+        }
+    return {"0": "Card"}
 
 
 def analyze_layout_from_image_bytes(
     image_bytes: bytes,
     *,
-    model_variant: str = "nano",
+    model_variant: Optional[str] = None,
     imgsz: int = 1280,
     conf: float = 0.25,
     iou: float = 0.5,
@@ -56,17 +62,9 @@ def analyze_layout_from_image_bytes(
     width, height = img.size
 
     try:
-        model = get_model(model_variant)
-    except UnknownVariantError as exc:
-        return LayoutAnalysisResult(
-            image_width=width,
-            image_height=height,
-            elements=[],
-            model_info={},
-            errors=[str(exc)],
-        )
+        bundle = get_model(model_variant)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.exception("Failed to load model variant %s", model_variant)
+        logger.exception("Failed to load model %s", model_variant)
         return LayoutAnalysisResult(
             image_width=width,
             image_height=height,
@@ -75,8 +73,9 @@ def analyze_layout_from_image_bytes(
             errors=[f"model_load_error: {exc}"],
         )
 
-    raw_dets = infer_layout(model, img, imgsz=imgsz, conf=conf, iou=iou)
-    elements = to_layout_elements(raw_dets, width, height, _CLASS_MAP)
+    class_map = _build_class_map(bundle.model)
+    raw_dets = infer_layout(bundle.model, bundle.processor, img, conf=conf)
+    elements = to_layout_elements(raw_dets, width, height, class_map)
     assign_reading_order(elements)
 
     if extract_crops and elements:
@@ -91,8 +90,10 @@ def analyze_layout_from_image_bytes(
         image_height=height,
         elements=elements,
         model_info={
+            "model_id": bundle.model_id,
             "model_variant": model_variant,
-            "class_map": _CLASS_MAP,
+            "class_map": class_map,
+            "device": str(bundle.device),
             "imgsz": imgsz,
             "conf": conf,
             "iou": iou,
