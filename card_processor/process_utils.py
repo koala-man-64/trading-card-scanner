@@ -118,7 +118,6 @@ def detect_cards(image: np.ndarray) -> List[BoundingBox]:
     return detect_card_boxes(image)
 
 
-
 def extract_card_name_from_crop(crop: np.ndarray) -> str:
     """Extract a card name from a cropped card image using OCR."""
     if pytesseract is None:
