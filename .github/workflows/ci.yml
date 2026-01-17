@@ -51,7 +51,10 @@ jobs:
           docker run --name azurite -d --rm \
             -p 10000:10000 -p 10001:10001 -p 10002:10002 \
             mcr.microsoft.com/azure-storage/azurite \
-            azurite --skipApiVersionCheck --blobPort 10000 --queuePort 10001 --tablePort 10002
+            azurite --skipApiVersionCheck \
+            --blobHost 0.0.0.0 --blobPort 10000 \
+            --queueHost 0.0.0.0 --queuePort 10001 \
+            --tableHost 0.0.0.0 --tablePort 10002
           sleep 2
 
       - name: Lint, Format, and Type-Check
