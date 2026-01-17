@@ -60,5 +60,11 @@ jobs:
           ruff format . --check
           mypy . --ignore-missing-imports
 
+      - name: Normalize test directory casing
+        run: |
+          if [ -d Tests ]; then
+            mv Tests tests
+          fi
+
       - name: Run tests
         run: python -m pytest -q
