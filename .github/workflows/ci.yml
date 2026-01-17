@@ -20,14 +20,6 @@ jobs:
     name: CI
     runs-on: ubuntu-24.04
 
-    services:
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite
-        ports:
-          - 10000:10000
-          - 10001:10001
-          - 10002:10002
-
     env:
       AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
       AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
@@ -48,13 +40,22 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements.txt
-            requirements-dev.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install -r requirements-dev.txt
+
+      - name: Start Azurite emulator
+        run: |
+          docker run --name azurite -d --rm \
+            -p 10000:10000 -p 10001:10001 -p 10002:10002 \
+            mcr.microsoft.com/azure-storage/azurite \
+            azurite --skipApiVersionCheck \
+            --blobHost 0.0.0.0 --blobPort 10000 \
+            --queueHost 0.0.0.0 --queuePort 10001 \
+            --tableHost 0.0.0.0 --tablePort 10002
+          sleep 2
 
       - name: Lint, Format, and Type-Check
         run: |
@@ -62,5 +63,15 @@ jobs:
           ruff format . --check
           mypy . --ignore-missing-imports
 
+      - name: Normalize test directory casing
+        run: |
+          if [ -d Tests ]; then
+            mv Tests tests
+          fi
+
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Stop Azurite emulator
+        if: always()
+        run: docker stop azurite

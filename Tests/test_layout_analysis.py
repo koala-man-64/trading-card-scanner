@@ -3,14 +3,14 @@ import io
 import pytest
 from PIL import Image
 
-from CardProcessor.image_io import load_rgb_image
-from CardProcessor.layout_crops import attach_crops
-from CardProcessor.layout_post import (
+from card_processor.image_io import load_rgb_image
+from card_processor.layout_crops import attach_crops
+from card_processor.layout_post import (
     assign_reading_order,
     clamp_bbox,
     to_layout_elements,
 )
-from CardProcessor.layout_types import LayoutElement, RawDetection
+from card_processor.layout_types import LayoutElement, RawDetection
 
 
 def test_load_rgb_image_invalid_bytes():

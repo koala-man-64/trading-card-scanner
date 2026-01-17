@@ -7,7 +7,8 @@ import pytest
 import function_app
 
 
-SAMPLES = Path(__file__).parent / "Samples"
+SAMPLES = Path(__file__).parent / "samples"
+INPUT_SAMPLES = SAMPLES / "input"
 
 
 def _read_sample(name: str) -> bytes:
@@ -27,17 +28,17 @@ class _StubContainer:
 
 def test_save_processed_cards_to_folder_writes_files(tmp_path: Path) -> None:
     cards = [
-        ("Charizard V", _read_sample("sample output 1.jpg")),
-        ("Unknown Hero", _read_sample("sample output 2.jpg")),
-        ("unknown", _read_sample("sample output 3.jpg")),
+        ("Charizard V", _read_sample("sample_output_1.jpg")),
+        ("Unknown Hero", _read_sample("sample_output_2.jpg")),
+        ("unknown", _read_sample("sample_output_3.jpg")),
     ]
-    source_path = str(SAMPLES / "sample input 1.jpg")
+    source_path = str(INPUT_SAMPLES / "sample_input_1.jpg")
 
     function_app._save_processed_cards_to_folder(tmp_path, source_path, cards)
 
-    assert (tmp_path / "sample input 1_1.jpg").read_bytes() == cards[0][1]
-    assert (tmp_path / "sample input 1_2.jpg").read_bytes() == cards[1][1]
-    assert (tmp_path / "sample input 1_3.jpg").read_bytes() == cards[2][1]
+    assert (tmp_path / "sample_input_1_1.jpg").read_bytes() == cards[0][1]
+    assert (tmp_path / "sample_input_1_2.jpg").read_bytes() == cards[1][1]
+    assert (tmp_path / "sample_input_1_3.jpg").read_bytes() == cards[2][1]
 
 
 def test_save_processed_cards_to_folder_logs_and_continues_on_error(
@@ -54,33 +55,37 @@ def test_save_processed_cards_to_folder_logs_and_continues_on_error(
 
     monkeypatch.setattr(Path, "write_bytes", _write_bytes_with_failure)
 
-    first_bytes = _read_sample("sample output 1.jpg")
-    second_bytes = _read_sample("sample output 2.jpg")
+    first_bytes = _read_sample("sample_output_1.jpg")
+    second_bytes = _read_sample("sample_output_2.jpg")
     cards = [("Card One", first_bytes), ("Card Two", second_bytes)]
-    source_path = str(SAMPLES / "sample input 2.jpg")
+    source_path = str(INPUT_SAMPLES / "sample_input_2.jpg")
     with caplog.at_level(logging.ERROR):
         function_app._save_processed_cards_to_folder(tmp_path, source_path, cards)
 
     assert "Failed to save processed card Card One" in caplog.text
-    assert not (tmp_path / "sample input 2_1.jpg").exists()
-    assert (tmp_path / "sample input 2_2.jpg").read_bytes() == second_bytes
+    assert not (tmp_path / "sample_input_2_1.jpg").exists()
+    assert (tmp_path / "sample_input_2_2.jpg").read_bytes() == second_bytes
 
 
 def test_process_blob_bytes_uploads_processed_cards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     container = _StubContainer()
-    sample_bytes = _read_sample("sample output 1.jpg")
+    sample_bytes = _read_sample("sample_output_1.jpg")
     monkeypatch.setattr(
         function_app.process_utils,
         "extract_card_crops_from_image_bytes",
         lambda _: [("Cloud Card", sample_bytes)],
     )
-    source_path = str(SAMPLES / "sample input 1.jpg")
+    source_path = str(INPUT_SAMPLES / "sample_input_1.jpg")
 
-    function_app._process_blob_bytes(source_path, b"blob-bytes", container)  # type: ignore
+    function_app._process_blob_bytes(
+        source_path,
+        b"blob-bytes",
+        container,
+    )  # type: ignore
 
-    assert container.uploads == [("sample input 1_1.jpg", sample_bytes, True)]
+    assert container.uploads == [("sample_input_1_1.jpg", sample_bytes, True)]
 
 
 def test_process_blob_bytes_skips_upload_when_no_cards(
@@ -92,8 +97,12 @@ def test_process_blob_bytes_skips_upload_when_no_cards(
         "extract_card_crops_from_image_bytes",
         lambda _: [],
     )
-    source_path = str(SAMPLES / "sample input 1.jpg")
+    source_path = str(INPUT_SAMPLES / "sample_input_1.jpg")
 
-    function_app._process_blob_bytes(source_path, b"blob-bytes", container)  # type: ignore
+    function_app._process_blob_bytes(
+        source_path,
+        b"blob-bytes",
+        container,
+    )  # type: ignore
 
     assert container.uploads == []

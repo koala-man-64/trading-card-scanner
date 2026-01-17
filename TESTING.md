@@ -6,13 +6,12 @@ This document outlines the procedures for testing the application locally and in
 
 ### Prerequisites
 
-1.  **Python:** Ensure you have Python 3.10 or later installed.
+1.  **Python:** Ensure you have Python 3.10 installed (see `.python-version`).
 2.  **Dependencies:** Install the required dependencies using pip:
 
     ```bash
     python -m pip install --upgrade pip
     python -m pip install -r requirements.txt
-    python -m pip install -r requirements-dev.txt
     ```
 
 ### Running Tests

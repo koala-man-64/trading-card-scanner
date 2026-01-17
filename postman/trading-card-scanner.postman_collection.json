@@ -3,13 +3,13 @@
         "_postman_id": "9c72dd5b-1d2d-4d0d-9e30-0f47a60ee8c7",
         "name": "Trading Card Scanner",
         "description": "Select an environment (Local or Azure).\n\nHealth\n- GET {{baseUrl}}/api/health\n\nProcess Image (Body: binary image)\n- POST {{baseUrl}}/api/process (default: output=none)\n- POST {{baseUrl}}/api/process?output=return&format=zip\n- POST {{baseUrl}}/api/process?output=return&format=json\n- POST {{baseUrl}}/api/process?output=upload&name=sample.jpg\n\nLayout Analysis (Body: binary image)\n- POST {{baseUrl}}/api/layout (defaults: model_variant=nano, imgsz=1280, conf=0.25, iou=0.5, extract_crops=true, crop_format=png)\n- Example: POST {{baseUrl}}/api/layout?model_variant=small&imgsz=1280&conf=0.3&iou=0.5&extract_crops=true&crop_format=jpeg\n",
-        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
     },
     "item": [
         {
             "name": "Health",
             "request": {"method": "GET", "header": [], "url": "{{baseUrl}}/api/health"},
-            "response": [],
+            "response": []
         },
         {
             "name": "Process Image (zip)",
@@ -20,11 +20,11 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 1.jpg"},
+                    "file": {"src": "tests/samples/input/sample_input_1.jpg"}
                 },
-                "url": "{{baseUrl}}/api/process?output=return&format=zip",
+                "url": "{{baseUrl}}/api/process?output=return&format=zip"
             },
-            "response": [],
+            "response": []
         },
         {
             "name": "Process Image (json)",
@@ -35,11 +35,11 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 2.jpg"},
+                    "file": {"src": "tests/samples/input/sample_input_2.jpg"}
                 },
-                "url": "{{baseUrl}}/api/process?output=return&format=json",
+                "url": "{{baseUrl}}/api/process?output=return&format=json"
             },
-            "response": [],
+            "response": []
         },
         {
             "name": "Process Image (count only)",
@@ -50,11 +50,11 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 1.jpg"},
+                    "file": {"src": "tests/samples/input/sample_input_1.jpg"}
                 },
-                "url": "{{baseUrl}}/api/process",
+                "url": "{{baseUrl}}/api/process"
             },
-            "response": [],
+            "response": []
         },
         {
             "name": "Process Image (upload)",
@@ -65,11 +65,11 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 1.jpg"},
+                    "file": {"src": "tests/samples/input/sample_input_1.jpg"}
                 },
-                "url": "{{baseUrl}}/api/process?output=upload&name=sample%20input%201.jpg",
+                "url": "{{baseUrl}}/api/process?output=upload&name=sample%20input%201.jpg"
             },
-            "response": [],
+            "response": []
         },
         {
             "name": "Layout Analysis (default)",
@@ -80,11 +80,11 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 1.jpg"},
+                    "file": {"src": "tests/samples/input/sample_input_1.jpg"}
                 },
-                "url": "{{baseUrl}}/api/layout",
+                "url": "{{baseUrl}}/api/layout"
             },
-            "response": [],
+            "response": []
         },
         {
             "name": "Layout Analysis (custom params)",
@@ -95,12 +95,12 @@
                 ],
                 "body": {
                     "mode": "file",
-                    "file": {"src": "Tests/Samples/sample input 2.jpg"},
+                    "file": {"src": "tests/samples/input/sample_input_2.jpg"}
                 },
-                "url": "{{baseUrl}}/api/layout?model_variant=small&imgsz=1280&conf=0.3&iou=0.5&extract_crops=true&crop_format=jpeg",
+                "url": "{{baseUrl}}/api/layout?model_variant=small&imgsz=1280&conf=0.3&iou=0.5&extract_crops=true&crop_format=jpeg"
             },
-            "response": [],
-        },
+            "response": []
+        }
     ],
-    "variable": [{"key": "baseUrl", "value": "http://localhost:7071"}],
+    "variable": [{"key": "baseUrl", "value": "http://localhost:7071"}]
 }
