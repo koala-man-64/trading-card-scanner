@@ -14,6 +14,7 @@ os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
 os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
 
 from transformers import DetrForObjectDetection, DetrImageProcessor
+from transformers.feature_extraction_utils import BatchFeature
 
 from .layout_types import RawDetection
 
@@ -27,12 +28,12 @@ def infer_layout(
 ) -> List[RawDetection]:
     """Run DETR inference and return raw detections."""
     device = next(model.parameters()).device
-    inputs = processor(images=img, return_tensors="pt")
+    inputs: BatchFeature = processor(images=img, return_tensors="pt")
     inputs = inputs.to(device)
     with torch.no_grad():
         outputs = model(**inputs)
 
-    target_sizes = torch.tensor([[img.height, img.width]], device=device)
+    target_sizes = [(img.height, img.width)]
     results = processor.post_process_object_detection(
         outputs, threshold=conf, target_sizes=target_sizes
     )
