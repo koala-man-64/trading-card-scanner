@@ -31,11 +31,16 @@ class _StubRequest:
 
 class _StubBlob:
     def __init__(
-        self, name: str, size: int = 0, last_modified: Optional[datetime] = None
+        self,
+        name: str,
+        size: int = 0,
+        last_modified: Optional[datetime] = None,
+        metadata: Optional[Dict[str, str]] = None,
     ) -> None:
         self.name = name
         self.size = size
         self.last_modified = last_modified
+        self.metadata = metadata or {}
 
 
 class _StubContentSettings:
@@ -71,12 +76,14 @@ class _StubBlobClient:
         content_types: Dict[str, str],
         etag_map: Optional[Dict[str, str]] = None,
         last_modified_map: Optional[Dict[str, datetime]] = None,
+        metadata_map: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> None:
         self._name = name
         self._data_map = data_map
         self._content_types = content_types
         self._etag_map = etag_map or {}
         self._last_modified_map = last_modified_map or {}
+        self._metadata_map = metadata_map or {}
         self.url = f"https://example.blob.core.windows.net/container/{name}"
 
     def get_blob_properties(self) -> _StubBlobProperties:
@@ -94,6 +101,28 @@ class _StubBlobClient:
             raise ResourceNotFoundError(message="Blob not found")
         return _StubDownload(self._data_map[self._name])
 
+    def set_blob_metadata(self, metadata: Dict[str, str]) -> None:
+        self._metadata_map[self._name] = dict(metadata)
+
+
+class _StubBlobPager:
+    def __init__(self, blobs: List[_StubBlob], page_size: int) -> None:
+        self._blobs = list(blobs)
+        self._page_size = max(1, page_size)
+        self.continuation_token: Optional[str] = None
+
+    def __iter__(self):
+        return iter(self._blobs)
+
+    def by_page(self, continuation_token: Optional[str] = None):
+        start = int(continuation_token or 0)
+        for idx in range(start, len(self._blobs), self._page_size):
+            next_idx = idx + self._page_size
+            self.continuation_token = (
+                str(next_idx) if next_idx < len(self._blobs) else None
+            )
+            yield self._blobs[idx:next_idx]
+
 
 class _StubContainerClient:
     def __init__(
@@ -103,12 +132,14 @@ class _StubContainerClient:
         content_types: Optional[Dict[str, str]] = None,
         etag_map: Optional[Dict[str, str]] = None,
         last_modified_map: Optional[Dict[str, datetime]] = None,
+        metadata_map: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> None:
         self._blobs = list(blobs or [])
         self._data_map = data_map or {}
         self._content_types = content_types or {}
         self._etag_map = etag_map or {}
         self._last_modified_map = last_modified_map or {}
+        self._metadata_map = metadata_map or {}
         self.account_name = "acct"
         self.container_name = "container"
         self.last_prefix: Optional[str] = None
@@ -117,12 +148,20 @@ class _StubContainerClient:
         self,
         name_starts_with: Optional[str] = None,
         include: Optional[Union[str, List[str]]] = None,
+        results_per_page: Optional[int] = None,
         *,
         timeout: Optional[int] = None,
         **kwargs: object,
     ):
         self.last_prefix = name_starts_with
-        return list(self._blobs)
+        if name_starts_with:
+            filtered = [
+                blob for blob in self._blobs if blob.name.startswith(name_starts_with)
+            ]
+        else:
+            filtered = list(self._blobs)
+        page_size = results_per_page or max(1, len(filtered))
+        return _StubBlobPager(filtered, page_size)
 
     def get_blob_client(
         self,
@@ -137,6 +176,7 @@ class _StubContainerClient:
             self._content_types,
             etag_map=self._etag_map,
             last_modified_map=self._last_modified_map,
+            metadata_map=self._metadata_map,
         )
 
 
@@ -547,3 +587,88 @@ def test_process_image_upload_mode_returns_payload(
         "my photo.jpg"
     )
     assert captured["count"] == 1
+
+
+def test_process_all_input_storage_not_configured_returns_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(function_app, "_get_container_client", lambda _: (None, None))
+    resp = function_app.process_all_input(_StubRequest())
+    assert resp.status_code == 500
+
+
+def test_process_all_input_processed_storage_missing_returns_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container = _StubContainerClient()
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+    monkeypatch.setattr(function_app, "_get_storage_clients", lambda: (None, None))
+    resp = function_app.process_all_input(_StubRequest())
+    assert resp.status_code == 500
+
+
+def test_process_all_input_processes_and_marks_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata_map = {
+        "input/a.jpg": {},
+        "input/b.jpg": {"processed": "true"},
+    }
+    blobs = [
+        _StubBlob("input/a.jpg", metadata=metadata_map["input/a.jpg"]),
+        _StubBlob("input/b.jpg", metadata=metadata_map["input/b.jpg"]),
+    ]
+    data_map = {"input/a.jpg": b"a", "input/b.jpg": b"b"}
+    container = _StubContainerClient(
+        blobs=blobs,
+        data_map=data_map,
+        metadata_map=metadata_map,
+    )
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+    monkeypatch.setattr(function_app, "_get_storage_clients", lambda: (None, object()))
+
+    captured = []
+
+    def _fake_process_blob_bytes(source_name, blob_bytes, processed_container) -> None:
+        captured.append((source_name, blob_bytes, processed_container))
+
+    monkeypatch.setattr(function_app, "_process_blob_bytes", _fake_process_blob_bytes)
+
+    resp = function_app.process_all_input(_StubRequest())
+    payload = json.loads(resp.get_body().decode("utf-8"))
+
+    assert resp.status_code == 200
+    assert payload["processed"] == 1
+    assert payload["skipped"] == 1
+    assert payload["failed"] == 0
+    assert payload["next_token"] is None
+    assert captured[0][0] == "input/a.jpg"
+    assert captured[0][1] == b"a"
+    assert metadata_map["input/a.jpg"]["processed"] == "true"
+
+
+def test_process_all_input_dry_run_skips_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blobs = [_StubBlob("input/a.jpg"), _StubBlob("input/b.jpg")]
+    container = _StubContainerClient(blobs=blobs)
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+
+    def _unexpected_call(*_, **__):
+        raise AssertionError("Unexpected storage call")
+
+    monkeypatch.setattr(function_app, "_get_storage_clients", _unexpected_call)
+    monkeypatch.setattr(function_app, "_process_blob_bytes", _unexpected_call)
+
+    resp = function_app.process_all_input(_StubRequest(params={"dry_run": "true"}))
+    payload = json.loads(resp.get_body().decode("utf-8"))
+
+    assert resp.status_code == 200
+    assert payload["processed"] == 2
+    assert payload["skipped"] == 0

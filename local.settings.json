@@ -9,7 +9,8 @@
                    "GALLERY_CONTAINER_NAME":  "processed",
                    "GALLERY_INPUT_PREFIX":  "input",
                    "GALLERY_PROCESSED_PREFIX":  "processed",
-                   "GALLERY_SEGMENTED_PREFIX":  "segmented"
+                   "GALLERY_SEGMENTED_PREFIX":  "segmented",
+                   "languageWorkers:python:defaultExecutablePath": ".venv\\bin\\python"
                },
     "Host":  {
                  "LocalHttpPort":  7071,

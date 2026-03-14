@@ -51,6 +51,8 @@ STORAGE_AUTH_MODE = (
     os.environ.get("STORAGE_AUTH_MODE", "connection_string").strip().lower()
 )
 STORAGE_ACCOUNT_URL = os.environ.get("STORAGE_ACCOUNT_URL")
+PROCESS_ALL_DEFAULT_MAX_BLOBS = int(os.environ.get("PROCESS_ALL_MAX_BLOBS", "10"))
+PROCESS_ALL_MAX_BLOBS_CAP = int(os.environ.get("PROCESS_ALL_MAX_BLOBS_CAP", "100"))
 
 
 class _BlobClientUrl(Protocol):
@@ -98,16 +100,10 @@ def _resolve_auth_level(
     return default
 
 
-DEFAULT_AUTH_LEVEL = _resolve_auth_level(
-    os.environ.get("HTTP_AUTH_LEVEL"), func.AuthLevel.FUNCTION
-)
-GALLERY_AUTH_LEVEL = _resolve_auth_level(
-    os.environ.get("GALLERY_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
-)
-
-HEALTH_AUTH_LEVEL = _resolve_auth_level(
-    os.environ.get("HEALTH_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
-)
+DEFAULT_AUTH_LEVEL = func.AuthLevel.ANONYMOUS
+GALLERY_AUTH_LEVEL = func.AuthLevel.ANONYMOUS
+HEALTH_AUTH_LEVEL = func.AuthLevel.ANONYMOUS
+BATCH_AUTH_LEVEL = func.AuthLevel.ANONYMOUS
 
 
 def _get_storage_clients() -> Tuple[
@@ -584,6 +580,162 @@ def _parse_bool_param(value: Optional[str], *, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@app.function_name(name="ProcessAllInput")
+@app.route(route="process/all", methods=["POST"], auth_level=BATCH_AUTH_LEVEL)
+def process_all_input(req: func.HttpRequest) -> func.HttpResponse:
+    """Process blobs from the input container in batches.
+
+    Query params:
+      - prefix=<blob prefix>
+      - max_blobs=<int>
+      - continuation=<opaque continuation token>
+      - force=<bool>
+      - dry_run=<bool>
+      - mark_processed=<bool>
+    """
+    job_id = uuid.uuid4().hex
+    prefix = (req.params.get("prefix") or "").strip()
+    continuation_token = (
+        (req.params.get("continuation") or req.params.get("continuation_token") or "")
+        .strip()
+        or None
+    )
+    force = _parse_bool_param(req.params.get("force"), default=False)
+    dry_run = _parse_bool_param(req.params.get("dry_run"), default=False)
+    mark_processed = _parse_bool_param(
+        req.params.get("mark_processed"), default=not dry_run
+    )
+
+    max_blobs_raw = (req.params.get("max_blobs") or "").strip()
+    if max_blobs_raw:
+        try:
+            max_blobs = int(max_blobs_raw)
+        except ValueError:
+            return func.HttpResponse(
+                "max_blobs must be an integer.", status_code=400
+            )
+    else:
+        max_blobs = PROCESS_ALL_DEFAULT_MAX_BLOBS
+
+    if max_blobs < 1 or max_blobs > PROCESS_ALL_MAX_BLOBS_CAP:
+        return func.HttpResponse(
+            f"max_blobs must be between 1 and {PROCESS_ALL_MAX_BLOBS_CAP}.",
+            status_code=400,
+        )
+
+    _, input_container = _get_container_client(INPUT_CONTAINER_NAME)
+    if not input_container:
+        return func.HttpResponse(
+            "Storage is not configured. Set AzureWebJobsStorage.", status_code=500
+        )
+
+    processed_container = None
+    if not dry_run:
+        _, processed_container = _get_storage_clients()
+        if not processed_container:
+            return func.HttpResponse(
+                "Storage is not configured. Set AzureWebJobsStorage.",
+                status_code=500,
+            )
+
+    normalized_prefix = _normalize_prefix(prefix)
+    include = ["metadata"] if (mark_processed or not force) else None
+
+    logging.info(
+        "ProcessAllInput job=%s prefix=%s max_blobs=%d dry_run=%s force=%s",
+        job_id,
+        normalized_prefix,
+        max_blobs,
+        dry_run,
+        force,
+    )
+
+    blob_iter = input_container.list_blobs(
+        name_starts_with=normalized_prefix or None,
+        include=include,
+        results_per_page=max_blobs,
+    )
+    page_iter = (
+        blob_iter.by_page(continuation_token=continuation_token)
+        if hasattr(blob_iter, "by_page")
+        else [list(blob_iter)]
+    )
+
+    processed_count = 0
+    skipped_count = 0
+    failed_count = 0
+    next_token: Optional[str] = None
+
+    for page in page_iter:
+        for blob in page:
+            metadata = getattr(blob, "metadata", None) or {}
+            if not force and metadata.get("processed") == "true":
+                skipped_count += 1
+                continue
+
+            if dry_run:
+                processed_count += 1
+                continue
+
+            blob_client = input_container.get_blob_client(blob.name)
+            try:
+                blob_bytes = blob_client.download_blob().readall()
+            except ResourceNotFoundError:
+                logging.warning(
+                    "ProcessAllInput job=%s blob missing: %s", job_id, blob.name
+                )
+                failed_count += 1
+                continue
+            except Exception as exc:
+                logging.error(
+                    "ProcessAllInput job=%s failed to download %s: %s",
+                    job_id,
+                    blob.name,
+                    exc,
+                )
+                failed_count += 1
+                continue
+
+            _process_blob_bytes(blob.name, blob_bytes, processed_container)
+            processed_count += 1
+
+            if mark_processed:
+                updated = dict(metadata)
+                updated["processed"] = "true"
+                updated["processed_at"] = _format_rfc3339(
+                    datetime.now(timezone.utc)
+                )
+                try:
+                    blob_client.set_blob_metadata(updated)
+                except Exception as exc:
+                    logging.warning(
+                        "ProcessAllInput job=%s failed to mark metadata for %s: %s",
+                        job_id,
+                        blob.name,
+                        exc,
+                    )
+
+        next_token = getattr(page_iter, "continuation_token", None)
+        break
+
+    payload = {
+        "job_id": job_id,
+        "container": INPUT_CONTAINER_NAME,
+        "prefix": normalized_prefix,
+        "processed": processed_count,
+        "skipped": skipped_count,
+        "failed": failed_count,
+        "dry_run": dry_run,
+        "max_blobs": max_blobs,
+        "next_token": next_token,
+    }
+    return func.HttpResponse(
+        body=json.dumps(payload),
+        status_code=200,
+        mimetype="application/json",
+    )
 
 
 @app.function_name(name="AnalyzeLayout")
