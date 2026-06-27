@@ -197,7 +197,9 @@ SIGNATURE_PATTERNS = [
     re.compile(r"\bfunction\s+[A-Za-z_][A-Za-z0-9_]*\s*\("),
     re.compile(r"\binterface\s+[A-Za-z_][A-Za-z0-9_]*\b"),
     re.compile(r"\btype\s+[A-Za-z_][A-Za-z0-9_]*\s*="),
-    re.compile(r"\bpublic\s+[A-Za-z_][A-Za-z0-9_<>\[\]]*\s+[A-Za-z_][A-Za-z0-9_]*\s*\("),
+    re.compile(
+        r"\bpublic\s+[A-Za-z_][A-Za-z0-9_<>\[\]]*\s+[A-Za-z_][A-Za-z0-9_]*\s*\("
+    ),
 ]
 
 IMPORT_PATTERNS = [
@@ -211,7 +213,9 @@ SECRETS_PATTERNS = {
     "AWS access key": re.compile(r"AKIA[0-9A-Z]{16}"),
     "Hardcoded password": re.compile(r"(?i)password\s*[:=]\s*['\"][^'\"]+['\"]"),
     "Hardcoded API key": re.compile(r"(?i)api[_-]?key\s*[:=]\s*['\"][^'\"]+['\"]"),
-    "Private key material": re.compile(r"-----BEGIN (RSA|EC|OPENSSH|DSA) PRIVATE KEY-----"),
+    "Private key material": re.compile(
+        r"-----BEGIN (RSA|EC|OPENSSH|DSA) PRIVATE KEY-----"
+    ),
 }
 
 INSECURE_PATTERNS = {
@@ -284,7 +288,9 @@ def trim_output(text: str, max_lines: int = 60, max_chars: int = 8000) -> str:
     return clipped
 
 
-def run_list_command(cmd: list[str], cwd: pathlib.Path, timeout: int = 180) -> tuple[int, str, str]:
+def run_list_command(
+    cmd: list[str], cwd: pathlib.Path, timeout: int = 180
+) -> tuple[int, str, str]:
     proc = subprocess.run(
         cmd,
         cwd=str(cwd),
@@ -296,7 +302,9 @@ def run_list_command(cmd: list[str], cwd: pathlib.Path, timeout: int = 180) -> t
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def run_shell_command(command: str, cwd: pathlib.Path, timeout: int = 1800) -> CommandResult:
+def run_shell_command(
+    command: str, cwd: pathlib.Path, timeout: int = 1800
+) -> CommandResult:
     started = time.perf_counter()
     if os.name == "nt":
         shell_command = ["powershell.exe", "-NoProfile", "-Command", command]
@@ -346,7 +354,9 @@ def git_maybe_output(repo: pathlib.Path, args: list[str], timeout: int = 120) ->
 
 
 def git_ref_exists(repo: pathlib.Path, ref: str) -> bool:
-    code, _, _ = run_list_command(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=repo)
+    code, _, _ = run_list_command(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=repo
+    )
     return code == 0
 
 
@@ -360,11 +370,15 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
-def load_config(repo: pathlib.Path, config_path: str) -> tuple[dict[str, Any], list[str]]:
+def load_config(
+    repo: pathlib.Path, config_path: str
+) -> tuple[dict[str, Any], list[str]]:
     issues: list[str] = []
     resolved = repo / config_path
     if not resolved.exists():
-        issues.append(f"Configuration file missing: {config_path}. Using built-in defaults.")
+        issues.append(
+            f"Configuration file missing: {config_path}. Using built-in defaults."
+        )
         return dict(DEFAULT_CONFIG), issues
 
     try:
@@ -374,7 +388,9 @@ def load_config(repo: pathlib.Path, config_path: str) -> tuple[dict[str, Any], l
         return dict(DEFAULT_CONFIG), issues
 
     if not isinstance(loaded, dict):
-        issues.append(f"Configuration at {config_path} is not a YAML mapping. Using defaults.")
+        issues.append(
+            f"Configuration at {config_path} is not a YAML mapping. Using defaults."
+        )
         return dict(DEFAULT_CONFIG), issues
 
     merged = deep_merge(DEFAULT_CONFIG, loaded)
@@ -476,7 +492,12 @@ def parse_dependencies_for_file(path: str, content: str) -> set[str]:
     if path.endswith("package.json"):
         data = safe_json_load(content)
         deps = set()
-        for key in ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]:
+        for key in [
+            "dependencies",
+            "devDependencies",
+            "peerDependencies",
+            "optionalDependencies",
+        ]:
             section = data.get(key, {})
             if isinstance(section, dict):
                 deps.update({str(dep).lower() for dep in section.keys()})
@@ -502,7 +523,9 @@ def parse_imports(content: str) -> set[str]:
     return imports
 
 
-def get_diff(repo: pathlib.Path, compare_from: str, compare_to: str, file_path: str | None = None) -> str:
+def get_diff(
+    repo: pathlib.Path, compare_from: str, compare_to: str, file_path: str | None = None
+) -> str:
     args = ["diff", "--unified=3", f"{compare_from}..{compare_to}"]
     if file_path:
         args.extend(["--", file_path])
@@ -516,7 +539,9 @@ def get_working_tree_diff(repo: pathlib.Path) -> str:
     return "\n\n".join(parts)
 
 
-def extract_hunks(diff_text: str, max_hunks: int = 2, max_lines_per_hunk: int = 18) -> list[str]:
+def extract_hunks(
+    diff_text: str, max_hunks: int = 2, max_lines_per_hunk: int = 18
+) -> list[str]:
     if not diff_text:
         return []
     lines = diff_text.splitlines()
@@ -569,7 +594,9 @@ def parse_changed_files_from_porcelain(lines: list[str]) -> tuple[list[str], lis
     return sorted(set(tracked)), sorted(set(untracked))
 
 
-def resolve_baseline(repo: pathlib.Path, config: dict[str, Any], cli_override: str | None) -> tuple[str, str]:
+def resolve_baseline(
+    repo: pathlib.Path, config: dict[str, Any], cli_override: str | None
+) -> tuple[str, str]:
     baseline_cfg = config.get("baseline", {}) or {}
     candidates: list[tuple[str, str]] = []
 
@@ -598,11 +625,15 @@ def resolve_baseline(repo: pathlib.Path, config: dict[str, Any], cli_override: s
         if ref and git_ref_exists(repo, ref):
             return ref, reason
 
-    latest_tag = git_maybe_output(repo, ["describe", "--tags", "--abbrev=0"], timeout=30)
+    latest_tag = git_maybe_output(
+        repo, ["describe", "--tags", "--abbrev=0"], timeout=30
+    )
     if latest_tag and git_ref_exists(repo, latest_tag):
         return latest_tag, "latest release tag"
 
-    first_commit = git_output(repo, ["rev-list", "--max-parents=0", "HEAD"], timeout=30).splitlines()[0]
+    first_commit = git_output(
+        repo, ["rev-list", "--max-parents=0", "HEAD"], timeout=30
+    ).splitlines()[0]
     return first_commit, "repository root commit fallback"
 
 
@@ -612,7 +643,9 @@ def resolve_compare_refs(
     force_ci: bool,
     pr_head: str | None,
 ) -> tuple[str, str, bool]:
-    head_ref = pr_head or os.getenv("CODEDRIFT_PR_HEAD") or os.getenv("PR_HEAD") or "HEAD"
+    head_ref = (
+        pr_head or os.getenv("CODEDRIFT_PR_HEAD") or os.getenv("PR_HEAD") or "HEAD"
+    )
     if not git_ref_exists(repo, head_ref):
         head_ref = "HEAD"
 
@@ -621,7 +654,9 @@ def resolve_compare_refs(
     compare_to = head_ref
 
     if ci_detected:
-        merge_base = git_maybe_output(repo, ["merge-base", head_ref, baseline_ref], timeout=30)
+        merge_base = git_maybe_output(
+            repo, ["merge-base", head_ref, baseline_ref], timeout=30
+        )
         if merge_base:
             compare_from = merge_base
         compare_to = head_ref
@@ -638,23 +673,31 @@ def list_changed_files(
 ) -> list[str]:
     changed = set(
         line.strip()
-        for line in git_maybe_output(repo, ["diff", "--name-only", f"{compare_from}..{compare_to}"], timeout=120).splitlines()
+        for line in git_maybe_output(
+            repo, ["diff", "--name-only", f"{compare_from}..{compare_to}"], timeout=120
+        ).splitlines()
         if line.strip()
     )
 
     if include_worktree:
         changed.update(
             line.strip()
-            for line in git_maybe_output(repo, ["diff", "--name-only"], timeout=60).splitlines()
+            for line in git_maybe_output(
+                repo, ["diff", "--name-only"], timeout=60
+            ).splitlines()
             if line.strip()
         )
         changed.update(
             line.strip()
-            for line in git_maybe_output(repo, ["diff", "--cached", "--name-only"], timeout=60).splitlines()
+            for line in git_maybe_output(
+                repo, ["diff", "--cached", "--name-only"], timeout=60
+            ).splitlines()
             if line.strip()
         )
 
-    kept = [path for path in sorted(changed) if not is_excluded_path(path, exclude_globs)]
+    kept = [
+        path for path in sorted(changed) if not is_excluded_path(path, exclude_globs)
+    ]
     return kept
 
 
@@ -801,7 +844,9 @@ def detect_style_drift(
 ) -> list[Finding]:
     findings: list[Finding] = []
 
-    diff_check = git_maybe_output(repo, ["diff", "--check", f"{compare_from}..{compare_to}"], timeout=120)
+    diff_check = git_maybe_output(
+        repo, ["diff", "--check", f"{compare_from}..{compare_to}"], timeout=120
+    )
     if diff_check:
         findings.append(
             Finding(
@@ -811,7 +856,13 @@ def detect_style_drift(
                 title="Diff introduces formatting or whitespace violations",
                 expected="Formatting and whitespace should remain consistent with project standards.",
                 observed="`git diff --check` reported whitespace/style violations.",
-                files=sorted({line.split(":", 1)[0] for line in diff_check.splitlines() if ":" in line}),
+                files=sorted(
+                    {
+                        line.split(":", 1)[0]
+                        for line in diff_check.splitlines()
+                        if ":" in line
+                    }
+                ),
                 evidence=diff_check.splitlines()[:8],
                 remediation="Run formatter and lint auto-fix commands, then re-check with `git diff --check`.",
                 risk="low",
@@ -819,7 +870,11 @@ def detect_style_drift(
             )
         )
 
-    lint_failures = [res for res in quality_results if res.name in {"format", "lint"} and res.status == "failed"]
+    lint_failures = [
+        res
+        for res in quality_results
+        if res.name in {"format", "lint"} and res.status == "failed"
+    ]
     if lint_failures:
         evidence = []
         for failure in lint_failures[:3]:
@@ -875,7 +930,11 @@ def detect_architecture_drift(
             for imported in imports:
                 if forbid and path_matches(imported, forbid):
                     violations.append((file_path, imported, "forbidden"))
-                if allow and imported.startswith("src/") and not path_matches(imported, allow):
+                if (
+                    allow
+                    and imported.startswith("src/")
+                    and not path_matches(imported, allow)
+                ):
                     violations.append((file_path, imported, "outside_allowlist"))
 
     if violations:
@@ -895,7 +954,10 @@ def detect_architecture_drift(
                 evidence=evidence,
                 remediation="Move cross-layer logic to approved boundaries or introduce shared abstractions allowed by the layer contract.",
                 risk="medium",
-                verification=["Re-run code drift audit after refactor", "Run lint/typecheck/tests"],
+                verification=[
+                    "Re-run code drift audit after refactor",
+                    "Run lint/typecheck/tests",
+                ],
             )
         )
 
@@ -962,7 +1024,10 @@ def detect_api_drift(
                 evidence=evidence,
                 remediation="Version or adapt API changes, add compatibility shims, and document contract updates.",
                 risk="high" if severity in {"high", "critical"} else "medium",
-                verification=["Run contract/unit tests", "Review public API docs and changelog"],
+                verification=[
+                    "Run contract/unit tests",
+                    "Review public API docs and changelog",
+                ],
             )
         )
 
@@ -976,12 +1041,24 @@ def detect_dependency_drift(
     dependencies_cfg: dict[str, Any],
 ) -> list[Finding]:
     findings: list[Finding] = []
-    allowlist = {str(item).lower() for item in (dependencies_cfg.get("allowlist", []) or [])}
-    denylist = {str(item).lower() for item in (dependencies_cfg.get("denylist", []) or [])}
+    allowlist = {
+        str(item).lower() for item in (dependencies_cfg.get("allowlist", []) or [])
+    }
+    denylist = {
+        str(item).lower() for item in (dependencies_cfg.get("denylist", []) or [])
+    }
     lockfile_required = bool(dependencies_cfg.get("lockfile_required", False))
 
-    manifest_files = [path for path in changed_files if any(path.endswith(name) for name in MANIFEST_PATTERNS)]
-    lockfile_files = [path for path in changed_files if any(path.endswith(name) for name in LOCKFILE_PATTERNS)]
+    manifest_files = [
+        path
+        for path in changed_files
+        if any(path.endswith(name) for name in MANIFEST_PATTERNS)
+    ]
+    lockfile_files = [
+        path
+        for path in changed_files
+        if any(path.endswith(name) for name in LOCKFILE_PATTERNS)
+    ]
 
     added_deps: dict[str, list[str]] = defaultdict(list)
     denied: dict[str, list[str]] = defaultdict(list)
@@ -1037,7 +1114,10 @@ def detect_dependency_drift(
                 evidence=evidence,
                 remediation="Drop unapproved dependencies or explicitly update allowlist with review sign-off.",
                 risk="medium",
-                verification=["Review dependency approval records", "Re-run code drift audit"],
+                verification=[
+                    "Review dependency approval records",
+                    "Re-run code drift audit",
+                ],
             )
         )
 
@@ -1054,12 +1134,18 @@ def detect_dependency_drift(
                 evidence=["Manifest files: " + ", ".join(sorted(manifest_files))],
                 remediation="Regenerate lockfile and commit it with dependency changes.",
                 risk="low",
-                verification=["Run package manager install/lock", "Re-run dependency check"],
+                verification=[
+                    "Run package manager install/lock",
+                    "Re-run dependency check",
+                ],
             )
         )
 
     if added_deps and not denied and not outside_allowlist:
-        evidence = [f"{manifest}: {', '.join(deps)}" for manifest, deps in sorted(added_deps.items())]
+        evidence = [
+            f"{manifest}: {', '.join(deps)}"
+            for manifest, deps in sorted(added_deps.items())
+        ]
         findings.append(
             Finding(
                 category="dependency",
@@ -1088,7 +1174,11 @@ def detect_behavioral_and_test_drift(
     findings: list[Finding] = []
     test_definition_pattern = re.compile(r"\b(def\s+test_|(?:it|test)(?:\.each)?\()")
 
-    test_failures = [result for result in quality_results if result.name in {"test_fast", "test_full"} and result.status == "failed"]
+    test_failures = [
+        result
+        for result in quality_results
+        if result.name in {"test_fast", "test_full"} and result.status == "failed"
+    ]
     if test_failures:
         evidence: list[str] = []
         for failure in test_failures[:2]:
@@ -1128,7 +1218,10 @@ def detect_behavioral_and_test_drift(
         exclude_patterns=DEFAULT_EXCLUDED_PATH_PATTERNS,
     )
     for file_path, removed_line in removed_test_lines:
-        if test_definition_pattern.search(removed_line) and file_path not in added_test_files:
+        if (
+            test_definition_pattern.search(removed_line)
+            and file_path not in added_test_files
+        ):
             removed_test_files.add(file_path)
             removed_test_markers.append(f"{file_path}: {removed_line}")
 
@@ -1149,7 +1242,12 @@ def detect_behavioral_and_test_drift(
             )
         )
 
-    code_changed = [f for f in changed_files if path_matches(f, CODE_PATH_PATTERNS) and not path_matches(f, TEST_PATH_PATTERNS)]
+    code_changed = [
+        f
+        for f in changed_files
+        if path_matches(f, CODE_PATH_PATTERNS)
+        and not path_matches(f, TEST_PATH_PATTERNS)
+    ]
     tests_changed = [f for f in changed_files if path_matches(f, TEST_PATH_PATTERNS)]
     if code_changed and not tests_changed:
         findings.append(
@@ -1164,14 +1262,20 @@ def detect_behavioral_and_test_drift(
                 evidence=["Changed non-test files: " + ", ".join(code_changed[:15])],
                 remediation="Add targeted unit tests for modified modules and critical edge cases.",
                 risk="medium",
-                verification=["Run fast tests", "Review changed modules for edge cases"],
+                verification=[
+                    "Run fast tests",
+                    "Review changed modules for edge cases",
+                ],
             )
         )
 
     speculative_cfg = (detection_config or {}).get("speculative_safeguards", {}) or {}
     speculative_enabled = speculative_cfg.get("enabled", True)
     if speculative_enabled:
-        pattern_values = speculative_cfg.get("patterns") or DEFAULT_CONFIG["detection"]["speculative_safeguards"]["patterns"]
+        pattern_values = (
+            speculative_cfg.get("patterns")
+            or DEFAULT_CONFIG["detection"]["speculative_safeguards"]["patterns"]
+        )
         compiled_patterns: list[re.Pattern[str]] = []
         for value in pattern_values:
             pattern_text = str(value or "").strip()
@@ -1187,7 +1291,11 @@ def detect_behavioral_and_test_drift(
         for file_path, added_line in iter_added_lines_by_file(
             compare_diff,
             include_patterns=CODE_PATH_PATTERNS,
-            exclude_patterns=[*TEST_PATH_PATTERNS, *DOC_PATH_PATTERNS, *DEFAULT_EXCLUDED_PATH_PATTERNS],
+            exclude_patterns=[
+                *TEST_PATH_PATTERNS,
+                *DOC_PATH_PATTERNS,
+                *DEFAULT_EXCLUDED_PATH_PATTERNS,
+            ],
         ):
             payload = added_line[1:].strip()
             if not payload or re.match(r"^(#|//|/\*|\*)", payload):
@@ -1276,7 +1384,9 @@ def detect_security_drift(
             )
         )
 
-    protected_globs = [str(item) for item in (risk_controls.get("protected_globs", []) or [])]
+    protected_globs = [
+        str(item) for item in (risk_controls.get("protected_globs", []) or [])
+    ]
     if protected_globs:
         touched = [f for f in changed_files if path_matches(f, protected_globs)]
         if touched:
@@ -1292,11 +1402,18 @@ def detect_security_drift(
                     evidence=["Protected files touched: " + ", ".join(touched[:15])],
                     remediation="Require explicit approver sign-off and run focused regression/security tests.",
                     risk="high",
-                    verification=["Manual security review", "Auth/infrastructure regression tests"],
+                    verification=[
+                        "Manual security review",
+                        "Auth/infrastructure regression tests",
+                    ],
                 )
             )
 
-    security_gate_failures = [res for res in quality_results if res.name == "security" and res.status == "failed"]
+    security_gate_failures = [
+        res
+        for res in quality_results
+        if res.name == "security" and res.status == "failed"
+    ]
     if security_gate_failures:
         evidence = []
         for failure in security_gate_failures[:2]:
@@ -1336,15 +1453,25 @@ def detect_performance_drift(
         payload = line[1:]
         if re.search(r"\bfor\b.+\bin\b", payload):
             window = "\n".join(diff_lines[index : index + 5])
-            if re.search(r"(select\s+|\.query\(|requests\.|httpx\.|fetch\(|\.execute\()", window, re.IGNORECASE):
+            if re.search(
+                r"(select\s+|\.query\(|requests\.|httpx\.|fetch\(|\.execute\()",
+                window,
+                re.IGNORECASE,
+            ):
                 suspicious.append(payload[:140])
 
-    benchmark_failures = [res for res in quality_results if res.name == "benchmark" and res.status == "failed"]
+    benchmark_failures = [
+        res
+        for res in quality_results
+        if res.name == "benchmark" and res.status == "failed"
+    ]
 
     if suspicious or benchmark_failures:
         evidence = suspicious[:8]
         for failure in benchmark_failures[:2]:
-            evidence.append(f"Benchmark command failed: {failure.command} (exit {failure.exit_code})")
+            evidence.append(
+                f"Benchmark command failed: {failure.command} (exit {failure.exit_code})"
+            )
             evidence.extend(failure.output_excerpt.splitlines()[:6])
 
         findings.append(
@@ -1359,7 +1486,10 @@ def detect_performance_drift(
                 evidence=evidence[:14],
                 remediation="Inspect hotspots for N+1 patterns, cache repeated calls, and add focused micro-benchmarks.",
                 risk="medium",
-                verification=["Run benchmark command(s)", "Profile impacted endpoints/functions"],
+                verification=[
+                    "Run benchmark command(s)",
+                    "Profile impacted endpoints/functions",
+                ],
             )
         )
 
@@ -1385,11 +1515,18 @@ def detect_docs_drift(
                 title="Code changed without documentation updates",
                 expected="Docs/examples/changelog should stay aligned with behavior and API changes.",
                 observed="No documentation files changed alongside code updates.",
-                files=[path for path in changed_files if path_matches(path, CODE_PATH_PATTERNS)][:20],
+                files=[
+                    path
+                    for path in changed_files
+                    if path_matches(path, CODE_PATH_PATTERNS)
+                ][:20],
                 evidence=["No files matched docs patterns in the change set."],
                 remediation="Update README/docs/changelog to reflect behavior, API, and configuration changes.",
                 risk="low",
-                verification=["Review docs for changed modules", "Run docs lint/checks if available"],
+                verification=[
+                    "Review docs for changed modules",
+                    "Run docs lint/checks if available",
+                ],
             )
         )
 
@@ -1406,7 +1543,8 @@ def detect_config_infra_drift(
     touched_config = [
         path
         for path in changed_files
-        if path_matches(path, CONFIG_PATH_PATTERNS) and not is_excluded_path(path, DEFAULT_EXCLUDED_PATH_PATTERNS)
+        if path_matches(path, CONFIG_PATH_PATTERNS)
+        and not is_excluded_path(path, DEFAULT_EXCLUDED_PATH_PATTERNS)
     ]
     if touched_config:
         touched_config_set = set(touched_config)
@@ -1418,7 +1556,9 @@ def detect_config_infra_drift(
         ):
             if file_path not in touched_config_set:
                 continue
-            if re.search(r"\b(lint|typecheck|test|security)\b", removed_line, re.IGNORECASE):
+            if re.search(
+                r"\b(lint|typecheck|test|security)\b", removed_line, re.IGNORECASE
+            ):
                 weakened_gate_lines.append(f"{file_path}: {removed_line}")
         severity = "high" if weakened_gate_lines else "medium"
         findings.append(
@@ -1430,10 +1570,17 @@ def detect_config_infra_drift(
                 expected="Pipeline and infra changes should preserve or strengthen quality/safety gates.",
                 observed="CI/deploy/configuration files were modified.",
                 files=touched_config[:20],
-                evidence=(weakened_gate_lines[:10] if weakened_gate_lines else ["Changed config files: " + ", ".join(touched_config[:12])]),
+                evidence=(
+                    weakened_gate_lines[:10]
+                    if weakened_gate_lines
+                    else ["Changed config files: " + ", ".join(touched_config[:12])]
+                ),
                 remediation="Review config deltas with release/security owners and validate gates remain enforced.",
                 risk="medium",
-                verification=["Run CI pipeline in branch", "Validate deploy plans and policy checks"],
+                verification=[
+                    "Run CI pipeline in branch",
+                    "Validate deploy plans and policy checks",
+                ],
             )
         )
 
@@ -1457,7 +1604,10 @@ def detect_config_infra_drift(
                 evidence=[f"Lookback config-touching commits: {churn_counter}"],
                 remediation="Consolidate config ownership, batch related changes, and document rationale in PRs.",
                 risk="medium",
-                verification=["Inspect recent config PRs", "Audit gate consistency across workflows"],
+                verification=[
+                    "Inspect recent config PRs",
+                    "Audit gate consistency across workflows",
+                ],
             )
         )
 
@@ -1472,12 +1622,18 @@ def detect_multi_agent_patterns(
     recent_log: str,
 ) -> list[Finding]:
     findings: list[Finding] = []
-    code_files = [path for path in changed_files if path_matches(path, CODE_PATH_PATTERNS)]
+    code_files = [
+        path for path in changed_files if path_matches(path, CODE_PATH_PATTERNS)
+    ]
     if not code_files:
         return findings
 
-    non_test_code_files = [path for path in code_files if not path_matches(path, TEST_PATH_PATTERNS)]
-    test_code_files = [path for path in code_files if path_matches(path, TEST_PATH_PATTERNS)]
+    non_test_code_files = [
+        path for path in code_files if not path_matches(path, TEST_PATH_PATTERNS)
+    ]
+    test_code_files = [
+        path for path in code_files if path_matches(path, TEST_PATH_PATTERNS)
+    ]
 
     strategy_hits: Counter[str] = Counter()
     baseline_hits: Counter[str] = Counter()
@@ -1498,10 +1654,18 @@ def detect_multi_agent_patterns(
                 baseline_hits[strategy] += 1
 
         if re.search(r"(helper|util)", file_path, re.IGNORECASE):
-            for match in re.finditer(r"^\s*(?:def|function|const)\s+([A-Za-z_][A-Za-z0-9_]*)", content, re.MULTILINE):
+            for match in re.finditer(
+                r"^\s*(?:def|function|const)\s+([A-Za-z_][A-Za-z0-9_]*)",
+                content,
+                re.MULTILINE,
+            ):
                 helper_defs[match.group(1).lower()].append(file_path)
 
-        for match in re.finditer(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*(Service|Manager|Client|Wrapper))", content, re.MULTILINE):
+        for match in re.finditer(
+            r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*(Service|Manager|Client|Wrapper))",
+            content,
+            re.MULTILINE,
+        ):
             abstraction_defs[match.group(1)].append(file_path)
 
     for file_path in test_code_files:
@@ -1510,7 +1674,11 @@ def detect_multi_agent_patterns(
             test_style_hits["snapshot"] += 1
         if re.search(r"jest\.mock|mock\.patch|sinon", content):
             test_style_hits["mock-heavy"] += 1
-        if re.search(r"integration|@pytest\.mark\.integration|describe\(['\"]integration", content, re.IGNORECASE):
+        if re.search(
+            r"integration|@pytest\.mark\.integration|describe\(['\"]integration",
+            content,
+            re.IGNORECASE,
+        ):
             test_style_hits["integration-heavy"] += 1
 
     observed_strategies = [name for name, count in strategy_hits.items() if count > 0]
@@ -1527,16 +1695,27 @@ def detect_multi_agent_patterns(
                     expected=f"Use a consistent error-handling pattern. Baseline prevalence favors `{baseline_winner}`.",
                     observed=f"Dominant strategy shifted from `{baseline_winner}` to `{observed_winner}`.",
                     files=non_test_code_files[:20],
-                    evidence=[f"Baseline strategy counts: {dict(baseline_hits)}", f"Observed strategy counts: {dict(strategy_hits)}"],
+                    evidence=[
+                        f"Baseline strategy counts: {dict(baseline_hits)}",
+                        f"Observed strategy counts: {dict(strategy_hits)}",
+                    ],
                     remediation=f"Standardize error handling around `{baseline_winner}` and migrate divergent paths incrementally.",
                     risk="medium",
-                    verification=["Run targeted tests for standardized paths", "Re-run drift audit"],
+                    verification=[
+                        "Run targeted tests for standardized paths",
+                        "Re-run drift audit",
+                    ],
                 )
             )
 
-    duplicate_helpers = {name: paths for name, paths in helper_defs.items() if len(set(paths)) > 1}
+    duplicate_helpers = {
+        name: paths for name, paths in helper_defs.items() if len(set(paths)) > 1
+    }
     if duplicate_helpers:
-        evidence = [f"{name}: {', '.join(sorted(set(paths)))}" for name, paths in sorted(duplicate_helpers.items())]
+        evidence = [
+            f"{name}: {', '.join(sorted(set(paths)))}"
+            for name, paths in sorted(duplicate_helpers.items())
+        ]
         files = sorted({path for paths in duplicate_helpers.values() for path in paths})
         findings.append(
             Finding(
@@ -1550,14 +1729,24 @@ def detect_multi_agent_patterns(
                 evidence=evidence[:10],
                 remediation="Select one canonical helper, migrate call sites, and delete duplicates.",
                 risk="medium",
-                verification=["Run unit tests for consolidated helper", "Search for duplicate helper usage"],
+                verification=[
+                    "Run unit tests for consolidated helper",
+                    "Search for duplicate helper usage",
+                ],
             )
         )
 
-    competing_abstractions = {name: paths for name, paths in abstraction_defs.items() if len(set(paths)) > 1}
+    competing_abstractions = {
+        name: paths for name, paths in abstraction_defs.items() if len(set(paths)) > 1
+    }
     if competing_abstractions:
-        evidence = [f"{name}: {', '.join(sorted(set(paths)))}" for name, paths in sorted(competing_abstractions.items())]
-        files = sorted({path for paths in competing_abstractions.values() for path in paths})
+        evidence = [
+            f"{name}: {', '.join(sorted(set(paths)))}"
+            for name, paths in sorted(competing_abstractions.items())
+        ]
+        files = sorted(
+            {path for paths in competing_abstractions.values() for path in paths}
+        )
         findings.append(
             Finding(
                 category="architecture",
@@ -1619,7 +1808,15 @@ def add_attribution(
             if not entries:
                 fallback = git_maybe_output(
                     repo,
-                    ["log", "-n", "1", "--pretty=format:%h|%an|%ad|%s", "--date=short", "--", file_path],
+                    [
+                        "log",
+                        "-n",
+                        "1",
+                        "--pretty=format:%h|%an|%ad|%s",
+                        "--date=short",
+                        "--",
+                        file_path,
+                    ],
                     timeout=20,
                 )
                 entries = [line for line in fallback.splitlines() if line.strip()]
@@ -1634,7 +1831,9 @@ def compute_scores(
 ) -> tuple[float, dict[str, float], dict[str, int]]:
     configured_weights = {
         str(key): float(value)
-        for key, value in ((config.get("thresholds", {}) or {}).get("category_weights", {}) or {}).items()
+        for key, value in (
+            (config.get("thresholds", {}) or {}).get("category_weights", {}) or {}
+        ).items()
         if isinstance(value, (int, float))
     }
     weights = dict(DEFAULT_CATEGORY_WEIGHTS)
@@ -1652,7 +1851,11 @@ def compute_scores(
         category_scores[finding.category] += finding.score
         category_counts[finding.category] += 1
 
-    return round(total, 2), {k: round(v, 2) for k, v in category_scores.items()}, dict(category_counts)
+    return (
+        round(total, 2),
+        {k: round(v, 2) for k, v in category_scores.items()},
+        dict(category_counts),
+    )
 
 
 def build_hotspots(findings: list[Finding]) -> list[dict[str, Any]]:
@@ -1733,9 +1936,13 @@ def build_patch_preview(
             continue
         diff = get_diff(repo, compare_from, compare_to, path)
         if not diff:
-            diff = git_maybe_output(repo, ["diff", "--unified=3", "--", path], timeout=120)
+            diff = git_maybe_output(
+                repo, ["diff", "--unified=3", "--", path], timeout=120
+            )
         if not diff:
-            diff = git_maybe_output(repo, ["diff", "--cached", "--unified=3", "--", path], timeout=120)
+            diff = git_maybe_output(
+                repo, ["diff", "--cached", "--unified=3", "--", path], timeout=120
+            )
         hunks = extract_hunks(diff, max_hunks=2, max_lines_per_hunk=16)
         if hunks:
             preview.append({"file": path, "hunks": hunks})
@@ -1751,7 +1958,11 @@ def safe_remove_untracked(repo: pathlib.Path, files: list[str]) -> None:
 
 def revert_files(repo: pathlib.Path, tracked: list[str], untracked: list[str]) -> None:
     if tracked:
-        subprocess.run(["git", "restore", "--staged", "--worktree", "--", *tracked], cwd=str(repo), check=False)
+        subprocess.run(
+            ["git", "restore", "--staged", "--worktree", "--", *tracked],
+            cwd=str(repo),
+            check=False,
+        )
     if untracked:
         safe_remove_untracked(repo, untracked)
 
@@ -1776,14 +1987,19 @@ def run_auto_remediation(
             "details": pre_status[:20],
         }
 
-    commands = [str(cmd) for cmd in (auto_cfg.get("commands", []) or []) if str(cmd).strip()]
+    commands = [
+        str(cmd) for cmd in (auto_cfg.get("commands", []) or []) if str(cmd).strip()
+    ]
     if not commands:
         commands = [
             *[str(cmd) for cmd in (standards.get("format_fix", []) or [])],
             *[str(cmd) for cmd in (standards.get("lint_fix", []) or [])],
         ]
     if not commands:
-        return {"status": "skipped", "reason": "No auto-remediation commands configured"}
+        return {
+            "status": "skipped",
+            "reason": "No auto-remediation commands configured",
+        }
 
     command_results: list[CommandResult] = []
     for command in commands:
@@ -1796,11 +2012,15 @@ def run_auto_remediation(
             return {
                 "status": "failed",
                 "reason": f"Auto-remediation command failed: {command}",
-                "command_results": [dataclasses.asdict(item) for item in command_results],
+                "command_results": [
+                    dataclasses.asdict(item) for item in command_results
+                ],
             }
 
     status_lines = git_porcelain(repo)
-    tracked_changed, untracked_changed = parse_changed_files_from_porcelain(status_lines)
+    tracked_changed, untracked_changed = parse_changed_files_from_porcelain(
+        status_lines
+    )
     changed_files = sorted(set(tracked_changed + untracked_changed))
 
     if not changed_files:
@@ -1830,7 +2050,9 @@ def run_auto_remediation(
                 "reason": "Changes occurred outside auto_remediate.safe_directories",
                 "changed_files": changed_files,
                 "outside_safe_directories": outside,
-                "command_results": [dataclasses.asdict(item) for item in command_results],
+                "command_results": [
+                    dataclasses.asdict(item) for item in command_results
+                ],
             }
 
     protected = [str(item) for item in (risk_cfg.get("protected_globs", []) or [])]
@@ -1845,7 +2067,13 @@ def run_auto_remediation(
             "command_results": [dataclasses.asdict(item) for item in command_results],
         }
 
-    gate_results = run_quality_gates(repo, config, mode="auto-remediate", skip=skip_quality_gates, include_full_tests=True)
+    gate_results = run_quality_gates(
+        repo,
+        config,
+        mode="auto-remediate",
+        skip=skip_quality_gates,
+        include_full_tests=True,
+    )
     gate_failures = [item for item in gate_results if item.status == "failed"]
     if gate_failures:
         revert_files(repo, tracked_changed, untracked_changed)
@@ -1857,7 +2085,11 @@ def run_auto_remediation(
             "quality_gate_results": [dataclasses.asdict(item) for item in gate_results],
         }
 
-    patch_path = pathlib.Path(config.get("reporting", {}).get("patch_path", "artifacts/drift_remediation.patch"))
+    patch_path = pathlib.Path(
+        config.get("reporting", {}).get(
+            "patch_path", "artifacts/drift_remediation.patch"
+        )
+    )
     patch_abs = repo / patch_path
     patch_abs.parent.mkdir(parents=True, exist_ok=True)
     patch = git_maybe_output(repo, ["diff", "--binary"], timeout=240)
@@ -1897,7 +2129,9 @@ def render_markdown_report(data: dict[str, Any]) -> str:
         lines.append("| File/Module | Findings | Score |")
         lines.append("|---|---:|---:|")
         for hotspot in data["hotspots"]:
-            lines.append(f"| `{hotspot['path']}` | {hotspot['findings']} | {hotspot['score']} |")
+            lines.append(
+                f"| `{hotspot['path']}` | {hotspot['findings']} | {hotspot['score']} |"
+            )
     else:
         lines.append("No hotspots detected.")
     lines.append("")
@@ -1910,13 +2144,21 @@ def render_markdown_report(data: dict[str, Any]) -> str:
         for finding in data["findings"]:
             grouped[finding["category"]].append(finding)
 
-        for category in sorted(grouped.keys(), key=lambda key: REMEDIATION_PRIORITY.get(key, 99)):
+        for category in sorted(
+            grouped.keys(), key=lambda key: REMEDIATION_PRIORITY.get(key, 99)
+        ):
             lines.append(f"### {category_heading(category)}")
             for finding in grouped[category]:
-                lines.append(f"- **[{finding['severity'].upper()}] {finding['title']}** (confidence {finding['confidence']})")
-                lines.append(f"  - Expected vs Observed: {finding['expected']} | {finding['observed']}")
+                lines.append(
+                    f"- **[{finding['severity'].upper()}] {finding['title']}** (confidence {finding['confidence']})"
+                )
+                lines.append(
+                    f"  - Expected vs Observed: {finding['expected']} | {finding['observed']}"
+                )
                 if finding["files"]:
-                    lines.append(f"  - Files: {', '.join(f'`{path}`' for path in finding['files'][:10])}")
+                    lines.append(
+                        f"  - Files: {', '.join(f'`{path}`' for path in finding['files'][:10])}"
+                    )
                 if finding["evidence"]:
                     lines.append("  - Evidence:")
                     for item in finding["evidence"][:6]:
@@ -1964,17 +2206,21 @@ def render_markdown_report(data: dict[str, Any]) -> str:
 
     if data["baseline"].get("ci_context"):
         lines.append("## Merge Risk Assessment")
-        high_risk = [f for f in data["findings"] if f["severity"] in {"high", "critical"}]
-        lines.append(
-            f"- High/Critical findings: {len(high_risk)}"
-        )
+        high_risk = [
+            f for f in data["findings"] if f["severity"] in {"high", "critical"}
+        ]
+        lines.append(f"- High/Critical findings: {len(high_risk)}")
         lines.append(
             f"- Drift gate: {'FAIL' if data['gate_result'] == 'fail' else 'PASS'}"
         )
         if high_risk:
-            lines.append("- Merge recommendation: Block until top findings are remediated.")
+            lines.append(
+                "- Merge recommendation: Block until top findings are remediated."
+            )
         else:
-            lines.append("- Merge recommendation: Acceptable with follow-up action items.")
+            lines.append(
+                "- Merge recommendation: Acceptable with follow-up action items."
+            )
         lines.append("")
 
     lines.append("## Appendix")
@@ -1982,11 +2228,17 @@ def render_markdown_report(data: dict[str, Any]) -> str:
     for status in data.get("tool_run_status", []):
         lines.append(
             f"- `{status['name']}` `{status['command']}` -> **{status['status']}**"
-            + (f" (exit {status['exit_code']})" if status.get("exit_code") is not None else "")
+            + (
+                f" (exit {status['exit_code']})"
+                if status.get("exit_code") is not None
+                else ""
+            )
         )
         if status.get("output_excerpt"):
             lines.append("```text")
-            lines.append(trim_output(status["output_excerpt"], max_lines=12, max_chars=2000))
+            lines.append(
+                trim_output(status["output_excerpt"], max_lines=12, max_chars=2000)
+            )
             lines.append("```")
 
     if data.get("auto_remediation"):
@@ -1998,16 +2250,22 @@ def render_markdown_report(data: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def write_reports(repo: pathlib.Path, config: dict[str, Any], report_data: dict[str, Any]) -> tuple[pathlib.Path, pathlib.Path]:
+def write_reports(
+    repo: pathlib.Path, config: dict[str, Any], report_data: dict[str, Any]
+) -> tuple[pathlib.Path, pathlib.Path]:
     reporting = config.get("reporting", {}) or {}
-    markdown_path = repo / str(reporting.get("markdown_path", "artifacts/drift_report.md"))
+    markdown_path = repo / str(
+        reporting.get("markdown_path", "artifacts/drift_report.md")
+    )
     json_path = repo / str(reporting.get("json_path", "artifacts/drift_report.json"))
 
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.parent.mkdir(parents=True, exist_ok=True)
 
     markdown_path.write_text(render_markdown_report(report_data), encoding="utf-8")
-    json_path.write_text(json.dumps(report_data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(report_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
     return markdown_path, json_path
 
@@ -2015,11 +2273,19 @@ def write_reports(repo: pathlib.Path, config: dict[str, Any], report_data: dict[
 def print_ci_summary(report_data: dict[str, Any], markdown_path: pathlib.Path) -> None:
     findings = report_data.get("findings", [])
     print("CODE DRIFT GATE FAILED")
-    print(f"drift_score={report_data['drift_score']} threshold={report_data['thresholds']['drift_score_fail']}")
+    print(
+        f"drift_score={report_data['drift_score']} threshold={report_data['thresholds']['drift_score_fail']}"
+    )
     top = sorted(findings, key=lambda item: item.get("score", 0.0), reverse=True)[:5]
     for finding in top:
-        files = ", ".join(finding.get("files", [])[:2]) if finding.get("files") else "(no-file)"
-        print(f"- [{finding['severity']}] {finding['category']}: {finding['title']} :: {files}")
+        files = (
+            ", ".join(finding.get("files", [])[:2])
+            if finding.get("files")
+            else "(no-file)"
+        )
+        print(
+            f"- [{finding['severity']}] {finding['category']}: {finding['title']} :: {files}"
+        )
     print(f"Report: {markdown_path}")
 
 
@@ -2036,9 +2302,21 @@ def classify_all_drift(
     findings: list[Finding] = []
 
     findings.extend(detect_style_drift(repo, compare_from, compare_to, quality_results))
-    findings.extend(detect_architecture_drift(repo, changed_files, config.get("architecture", {}) or {}))
-    findings.extend(detect_api_drift(repo, changed_files, compare_from, compare_to, config.get("api", {}) or {}))
-    findings.extend(detect_dependency_drift(repo, changed_files, compare_from, config.get("dependencies", {}) or {}))
+    findings.extend(
+        detect_architecture_drift(
+            repo, changed_files, config.get("architecture", {}) or {}
+        )
+    )
+    findings.extend(
+        detect_api_drift(
+            repo, changed_files, compare_from, compare_to, config.get("api", {}) or {}
+        )
+    )
+    findings.extend(
+        detect_dependency_drift(
+            repo, changed_files, compare_from, config.get("dependencies", {}) or {}
+        )
+    )
     findings.extend(
         detect_behavioral_and_test_drift(
             changed_files,
@@ -2047,13 +2325,26 @@ def classify_all_drift(
             config.get("detection", {}) or {},
         )
     )
-    findings.extend(detect_performance_drift(changed_files, combined_diff, quality_results))
-    findings.extend(detect_security_drift(changed_files, combined_diff, quality_results, config.get("risk_controls", {}) or {}))
+    findings.extend(
+        detect_performance_drift(changed_files, combined_diff, quality_results)
+    )
+    findings.extend(
+        detect_security_drift(
+            changed_files,
+            combined_diff,
+            quality_results,
+            config.get("risk_controls", {}) or {},
+        )
+    )
 
     has_api_finding = any(item.category == "api" for item in findings)
     findings.extend(detect_docs_drift(changed_files, has_api_finding))
     findings.extend(detect_config_infra_drift(changed_files, combined_diff, recent_log))
-    findings.extend(detect_multi_agent_patterns(repo, changed_files, compare_from, compare_to, recent_log))
+    findings.extend(
+        detect_multi_agent_patterns(
+            repo, changed_files, compare_from, compare_to, recent_log
+        )
+    )
 
     add_attribution(repo, findings, compare_from, compare_to)
     return findings
@@ -2079,14 +2370,37 @@ def build_parser() -> argparse.ArgumentParser:
             """
         ),
     )
-    parser.add_argument("--repo", default=".", help="Repository root (default: current directory)")
-    parser.add_argument("--config", default=".codedrift.yml", help="Path to .codedrift.yml relative to repo root")
-    parser.add_argument("--mode", default="audit", choices=["audit", "recommend", "auto-remediate"], help="Operating mode")
-    parser.add_argument("--baseline-ref", default=None, help="Override baseline ref (commit/tag/branch)")
-    parser.add_argument("--ci", action="store_true", help="Force CI PR comparison behavior")
+    parser.add_argument(
+        "--repo", default=".", help="Repository root (default: current directory)"
+    )
+    parser.add_argument(
+        "--config",
+        default=".codedrift.yml",
+        help="Path to .codedrift.yml relative to repo root",
+    )
+    parser.add_argument(
+        "--mode",
+        default="audit",
+        choices=["audit", "recommend", "auto-remediate"],
+        help="Operating mode",
+    )
+    parser.add_argument(
+        "--baseline-ref", default=None, help="Override baseline ref (commit/tag/branch)"
+    )
+    parser.add_argument(
+        "--ci", action="store_true", help="Force CI PR comparison behavior"
+    )
     parser.add_argument("--pr-head", default=None, help="Optional PR head ref/SHA")
-    parser.add_argument("--skip-quality-gates", action="store_true", help="Skip running configured formatter/lint/typecheck/test commands")
-    parser.add_argument("--include-full-tests", action="store_true", help="Run standards.test_full in non-auto modes")
+    parser.add_argument(
+        "--skip-quality-gates",
+        action="store_true",
+        help="Skip running configured formatter/lint/typecheck/test commands",
+    )
+    parser.add_argument(
+        "--include-full-tests",
+        action="store_true",
+        help="Run standards.test_full in non-auto modes",
+    )
     parser.add_argument("--quiet", action="store_true", help="Reduce console output")
     return parser
 
@@ -2105,11 +2419,17 @@ def main() -> int:
     config, config_issues = load_config(repo, args.config)
 
     baseline_ref, baseline_reason = resolve_baseline(repo, config, args.baseline_ref)
-    compare_from, compare_to, ci_context = resolve_compare_refs(repo, baseline_ref, args.ci, args.pr_head)
+    compare_from, compare_to, ci_context = resolve_compare_refs(
+        repo, baseline_ref, args.ci, args.pr_head
+    )
 
     include_worktree = not ci_context
     detection_cfg = config.get("detection", {}) or {}
-    configured_excludes = [str(item) for item in (detection_cfg.get("exclude_globs", []) or []) if str(item).strip()]
+    configured_excludes = [
+        str(item)
+        for item in (detection_cfg.get("exclude_globs", []) or [])
+        if str(item).strip()
+    ]
     changed_files = list_changed_files(
         repo,
         compare_from,
@@ -2122,7 +2442,9 @@ def main() -> int:
     working_diff = get_working_tree_diff(repo) if include_worktree else ""
     combined_diff = "\n\n".join(part for part in [range_diff, working_diff] if part)
 
-    lookback_days = int((config.get("detection", {}) or {}).get("lookback_days", 14) or 14)
+    lookback_days = int(
+        (config.get("detection", {}) or {}).get("lookback_days", 14) or 14
+    )
     recent_log = collect_recent_log(repo, lookback_days)
 
     tool_run_status: list[CommandResult] = []
@@ -2137,7 +2459,9 @@ def main() -> int:
 
     auto_remediation: dict[str, Any] | None = None
     if mode == "auto-remediate":
-        auto_remediation = run_auto_remediation(repo, config, skip_quality_gates=args.skip_quality_gates)
+        auto_remediation = run_auto_remediation(
+            repo, config, skip_quality_gates=args.skip_quality_gates
+        )
 
     findings = classify_all_drift(
         repo=repo,
@@ -2172,7 +2496,9 @@ def main() -> int:
     patch_preview = build_patch_preview(repo, mode, hotspots, compare_from, compare_to)
     suggested_actions = generate_remediation_actions(findings)
 
-    drift_score_fail = float((config.get("thresholds", {}) or {}).get("drift_score_fail", 35) or 35)
+    drift_score_fail = float(
+        (config.get("thresholds", {}) or {}).get("drift_score_fail", 35) or 35
+    )
     gate_result = "fail" if drift_score >= drift_score_fail else "pass"
 
     report_data: dict[str, Any] = {
@@ -2207,7 +2533,9 @@ def main() -> int:
     if not args.quiet:
         print(f"Drift report markdown: {markdown_path}")
         print(f"Drift report json: {json_path}")
-        print(f"drift_score={drift_score} threshold={drift_score_fail} gate={gate_result}")
+        print(
+            f"drift_score={drift_score} threshold={drift_score_fail} gate={gate_result}"
+        )
         print(f"findings={len(findings)} changed_files={len(changed_files)}")
 
     if gate_result == "fail":

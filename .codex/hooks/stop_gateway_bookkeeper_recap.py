@@ -111,9 +111,7 @@ def main() -> int:
     if missing:
         reason = (
             "Before finishing, include a gateway-bookkeeper recap of what was "
-            "done or decided: "
-            + "; ".join(missing)
-            + "."
+            "done or decided: " + "; ".join(missing) + "."
         )
         return emit_json(block(reason))
     return 0

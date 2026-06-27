@@ -160,10 +160,13 @@ def _codex_skills_snapshot(repo: Path) -> Dict[str, Any]:
     config_path = skills_dir / "config.toml"
     return {
         "present": True,
-        "skill_directory_count": len([path for path in skills_dir.iterdir() if path.is_dir()]),
+        "skill_directory_count": len(
+            [path for path in skills_dir.iterdir() if path.is_dir()]
+        ),
         "skill_md_count": len(list(skills_dir.glob("*/SKILL.md"))),
         "openai_yaml_count": len(list(skills_dir.glob("*/agents/openai.yaml"))),
-        "config_toml_zero_byte": config_path.exists() and config_path.stat().st_size == 0,
+        "config_toml_zero_byte": config_path.exists()
+        and config_path.stat().st_size == 0,
         "yaml_parse_errors": yaml_parse_errors,
     }
 

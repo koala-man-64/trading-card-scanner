@@ -39,22 +39,60 @@ LANES = (
     ),
     (
         "ci-pipeline",
-        ("pipeline", "build failed", "failed build", "failing check", "failed check", "ci", "validation failed", "re-queue", "rerun"),
+        (
+            "pipeline",
+            "build failed",
+            "failed build",
+            "failing check",
+            "failed check",
+            "ci",
+            "validation failed",
+            "re-queue",
+            "rerun",
+        ),
         "delivery-orchestrator-agent -> actionmedic -> azure-devops-cicd-expert -> qa-release-gate-agent -> gateway-bookkeeper",
     ),
     (
         "production-incident",
-        ("production", "prod", "live", "incident", "500", "traceback", "exception", "relation ", "does not exist", "unavailable"),
+        (
+            "production",
+            "prod",
+            "live",
+            "incident",
+            "500",
+            "traceback",
+            "exception",
+            "relation ",
+            "does not exist",
+            "unavailable",
+        ),
         "delivery-orchestrator-agent -> forensic-debugger -> relevant specialist -> qa-release-gate-agent -> gateway-bookkeeper",
     ),
     (
         "azure-boards-bookkeeping",
-        ("azure boards", "work item", "workitem", "ab#", "backlog", "board", "bookkeeper", "sprint"),
+        (
+            "azure boards",
+            "work item",
+            "workitem",
+            "ab#",
+            "backlog",
+            "board",
+            "bookkeeper",
+            "sprint",
+        ),
         "delivery-orchestrator-agent -> gateway-bookkeeper",
     ),
     (
         "repo-cleanup",
-        ("git hygiene", "branch cleanup", "stale branch", "worktree", "repo cleanup", "prune", "conflict"),
+        (
+            "git hygiene",
+            "branch cleanup",
+            "stale branch",
+            "worktree",
+            "repo cleanup",
+            "prune",
+            "conflict",
+        ),
         "delivery-orchestrator-agent -> repoops-custodian -> git-hygiene-orchestrator -> gateway-bookkeeper",
     ),
     (
@@ -64,12 +102,31 @@ LANES = (
     ),
     (
         "frontend",
-        ("ui", "react", "component", "page", "css", "layout", "design", "browser", "playwright"),
+        (
+            "ui",
+            "react",
+            "component",
+            "page",
+            "css",
+            "layout",
+            "design",
+            "browser",
+            "playwright",
+        ),
         "delivery-orchestrator-agent -> frontend-design or delivery-engineer-agent -> ui-testing-expert -> git-hygiene-orchestrator",
     ),
     (
         "db-data",
-        ("database", "postgres", "sql", "migration", "schema", "dataframe", "pipeline data", "copy error"),
+        (
+            "database",
+            "postgres",
+            "sql",
+            "migration",
+            "schema",
+            "dataframe",
+            "pipeline data",
+            "copy error",
+        ),
         "delivery-orchestrator-agent -> db-steward or data-engineer-data-architect-advisor -> qa-release-gate-agent -> gateway-bookkeeper",
     ),
     (
@@ -90,12 +147,22 @@ def classify(prompt: str) -> tuple[str, str]:
     for lane, needles, sequence in LANES:
         if any(needle in normalized for needle in needles):
             return lane, sequence
-    return "implementation", "delivery-orchestrator-agent -> gateway-bookkeeper when tracked -> delivery-engineer-agent -> qa-release-gate-agent -> git-hygiene-orchestrator"
+    return (
+        "implementation",
+        "delivery-orchestrator-agent -> gateway-bookkeeper when tracked -> delivery-engineer-agent -> qa-release-gate-agent -> git-hygiene-orchestrator",
+    )
 
 
 def contract_hint(prompt: str) -> str:
     normalized = prompt.lower()
-    shared_terms = ("api response", "api request", "payload", "schema", "serialization", "contract")
+    shared_terms = (
+        "api response",
+        "api request",
+        "payload",
+        "schema",
+        "serialization",
+        "contract",
+    )
     if any(term in normalized for term in shared_terms):
         return "Potential shared contract surface detected. Identify the owning contract/source-of-truth before editing unless local evidence proves this is repo-private."
     return "Before editing, classify the work as local-only or contracts-repo-first if shared shapes are involved."
@@ -124,11 +191,7 @@ def main() -> int:
             f"- Finish workflow required: {'yes' if finish_required else 'no'}",
             "- Blanket finish approval: when task-owned files change and the user does not explicitly limit scope, complete the git-hygiene-orchestrator finish workflow before closeout instead of waiting for a separate 'finish it' prompt.",
             f"- Contract routing: {contract_hint(prompt)}",
-            *(
-                azure_devops_agent_authority_lines()
-                if tracking_required
-                else ()
-            ),
+            *(azure_devops_agent_authority_lines() if tracking_required else ()),
         ]
     )
     return emit_json(additional_context("UserPromptSubmit", context))

@@ -54,7 +54,9 @@ def validate_scenario(path: pathlib.Path, scenario: dict[str, Any]) -> list[str]
                     issues.append(f"expected_findings[{index}] missing `{field}`")
             severity = str(finding.get("severity", "")).lower()
             if severity and severity not in ALLOWED_SEVERITY:
-                issues.append(f"expected_findings[{index}] invalid severity `{severity}`")
+                issues.append(
+                    f"expected_findings[{index}] invalid severity `{severity}`"
+                )
 
     run_steps = scenario.get("run", [])
     if isinstance(run_steps, list):
@@ -67,18 +69,24 @@ def validate_scenario(path: pathlib.Path, scenario: dict[str, Any]) -> list[str]
 
 
 def print_scenario(path: pathlib.Path, scenario: dict[str, Any]) -> None:
-    print(f"- {scenario.get('id', '<missing-id>')} :: {scenario.get('title', '<missing-title>')} ({path.name})")
+    print(
+        f"- {scenario.get('id', '<missing-id>')} :: {scenario.get('title', '<missing-title>')} ({path.name})"
+    )
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="List/validate Code Drift Sentinel scenario definitions.")
+    parser = argparse.ArgumentParser(
+        description="List/validate Code Drift Sentinel scenario definitions."
+    )
     parser.add_argument(
         "--scenarios-dir",
         default=".codex/skills/code-drift-sentinel/codedrift_scenarios",
         help="Path to scenario yaml directory",
     )
     parser.add_argument("--list", action="store_true", help="List scenarios")
-    parser.add_argument("--validate", action="store_true", help="Validate scenario structure")
+    parser.add_argument(
+        "--validate", action="store_true", help="Validate scenario structure"
+    )
     args = parser.parse_args()
 
     scenario_root = pathlib.Path(args.scenarios_dir).resolve()

@@ -40,7 +40,11 @@ FIELDNAMES = [
 ]
 ACTIVE_STATUSES = {"claim", "heartbeat", "progress"}
 CLOSED_STATUSES = {"done", "abandon"}
-STATUS_CHOICES = sorted(ACTIVE_STATUSES | CLOSED_STATUSES | {"blocked", "handoff", "stale_reclaim", "conflict"})
+STATUS_CHOICES = sorted(
+    ACTIVE_STATUSES
+    | CLOSED_STATUSES
+    | {"blocked", "handoff", "stale_reclaim", "conflict"}
+)
 ACCESS_CHOICES = {"read", "shared", "exclusive"}
 
 
@@ -58,7 +62,12 @@ def utc_now() -> datetime:
 def format_utc(value: datetime | None) -> str:
     if value is None:
         return ""
-    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        value.astimezone(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def parse_utc(value: str | None, field_name: str) -> datetime | None:
@@ -70,7 +79,9 @@ def parse_utc(value: str | None, field_name: str) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError as exc:
-        raise SystemExit(f"{field_name} must be ISO 8601 UTC, for example 2026-04-19T20:00:00Z") from exc
+        raise SystemExit(
+            f"{field_name} must be ISO 8601 UTC, for example 2026-04-19T20:00:00Z"
+        ) from exc
     if parsed.tzinfo is None:
         raise SystemExit(f"{field_name} must include a timezone and end with Z")
     return parsed.astimezone(timezone.utc).replace(microsecond=0)
@@ -109,7 +120,9 @@ def append_rows(ledger_path: Path, rows: list[dict[str, str]]) -> None:
     with ledger_path.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDNAMES)
         for row in rows:
-            writer.writerow({field: sanitize_text(row.get(field, "")) for field in FIELDNAMES})
+            writer.writerow(
+                {field: sanitize_text(row.get(field, "")) for field in FIELDNAMES}
+            )
 
 
 def latest_by_task(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
@@ -125,7 +138,11 @@ def normalize_folder(project_root: Path, folder: str | None) -> str:
     if not folder:
         return "."
     candidate = Path(folder)
-    resolved = (project_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+    resolved = (
+        (project_root / candidate).resolve()
+        if not candidate.is_absolute()
+        else candidate.resolve()
+    )
     try:
         relative = resolved.relative_to(project_root)
     except ValueError as exc:
@@ -137,11 +154,17 @@ def normalize_message_ref(project_root: Path, message_ref: str | None) -> str:
     if not message_ref:
         return ""
     candidate = Path(message_ref)
-    resolved = (project_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+    resolved = (
+        (project_root / candidate).resolve()
+        if not candidate.is_absolute()
+        else candidate.resolve()
+    )
     try:
         relative = resolved.relative_to(project_root)
     except ValueError as exc:
-        raise SystemExit(f"message_ref must be relative to {project_root} or inside it") from exc
+        raise SystemExit(
+            f"message_ref must be relative to {project_root} or inside it"
+        ) from exc
     return relative.as_posix()
 
 
@@ -161,7 +184,11 @@ def parse_existing_time(row: dict[str, str] | None, field: str) -> datetime | No
 
 
 def split_folder(folder_relpath: str) -> list[str]:
-    return [] if folder_relpath == "." else [part for part in folder_relpath.split("/") if part]
+    return (
+        []
+        if folder_relpath == "."
+        else [part for part in folder_relpath.split("/") if part]
+    )
 
 
 def folders_overlap(left: str, right: str) -> bool:
@@ -169,7 +196,11 @@ def folders_overlap(left: str, right: str) -> bool:
     right_parts = split_folder(right)
     if not left_parts or not right_parts:
         return True
-    short, long = (left_parts, right_parts) if len(left_parts) <= len(right_parts) else (right_parts, left_parts)
+    short, long = (
+        (left_parts, right_parts)
+        if len(left_parts) <= len(right_parts)
+        else (right_parts, left_parts)
+    )
     return long[: len(short)] == short
 
 
@@ -184,14 +215,18 @@ def access_modes_compatible(left: str, right: str) -> bool:
 def is_nonstale_active(row: dict[str, str], reference_time: datetime) -> bool:
     if row.get("status") not in ACTIVE_STATUSES:
         return False
-    lease_expires_at = parse_utc(row.get("lease_expires_at_utc"), "lease_expires_at_utc")
+    lease_expires_at = parse_utc(
+        row.get("lease_expires_at_utc"), "lease_expires_at_utc"
+    )
     return bool(lease_expires_at and lease_expires_at > reference_time)
 
 
 def is_stale_active(row: dict[str, str], reference_time: datetime) -> bool:
     if row.get("status") not in ACTIVE_STATUSES:
         return False
-    lease_expires_at = parse_utc(row.get("lease_expires_at_utc"), "lease_expires_at_utc")
+    lease_expires_at = parse_utc(
+        row.get("lease_expires_at_utc"), "lease_expires_at_utc"
+    )
     return bool(lease_expires_at and lease_expires_at <= reference_time)
 
 
@@ -269,7 +304,9 @@ def conflict_notes(conflicts: list[dict[str, str]]) -> str:
 def validate_access_mode(access_mode: str, status: str) -> str:
     normalized = sanitize_text(access_mode)
     if normalized not in ACCESS_CHOICES:
-        raise SystemExit(f"{status} requires access_mode to be one of: read, shared, exclusive")
+        raise SystemExit(
+            f"{status} requires access_mode to be one of: read, shared, exclusive"
+        )
     return normalized
 
 
@@ -292,40 +329,80 @@ def append_event(args: argparse.Namespace) -> AppendResult:
         raise SystemExit("claim must use a new task_id; omit --task-id to generate one")
     if args.status != "claim" and not previous:
         raise SystemExit(f"task_id {args.task_id} was not found in the ledger")
-    if previous and previous.get("status") in CLOSED_STATUSES and args.status not in {"conflict", "stale_reclaim"}:
-        raise SystemExit(f"task_id {args.task_id} is already closed with status {previous['status']}")
+    if (
+        previous
+        and previous.get("status") in CLOSED_STATUSES
+        and args.status not in {"conflict", "stale_reclaim"}
+    ):
+        raise SystemExit(
+            f"task_id {args.task_id} is already closed with status {previous['status']}"
+        )
 
     task_id = sanitize_text(args.task_id) or make_id("task")
-    run_id = sanitize_text(args.run_id) or sanitize_text(previous.get("run_id") if previous else "") or make_id("run")
+    run_id = (
+        sanitize_text(args.run_id)
+        or sanitize_text(previous.get("run_id") if previous else "")
+        or make_id("run")
+    )
     project_id = derive_project_id(project_root, args.project_id)
-    folder_relpath = normalize_folder(project_root, args.folder or (previous.get("folder_relpath") if previous else "."))
-    access_mode = validate_access_mode(args.access_mode or (previous.get("access_mode") if previous else ""), args.status)
-    summary = sanitize_text(args.summary or (previous.get("summary") if previous else ""))
+    folder_relpath = normalize_folder(
+        project_root,
+        args.folder or (previous.get("folder_relpath") if previous else "."),
+    )
+    access_mode = validate_access_mode(
+        args.access_mode or (previous.get("access_mode") if previous else ""),
+        args.status,
+    )
+    summary = sanitize_text(
+        args.summary or (previous.get("summary") if previous else "")
+    )
     if args.status == "claim" and not summary:
         raise SystemExit("claim requires --summary")
     if len(summary) > 160:
         raise SystemExit("summary must be 160 characters or fewer")
 
-    started_at = parse_utc(args.started_at, "started_at") or parse_existing_time(previous, "started_at_utc")
+    started_at = parse_utc(args.started_at, "started_at") or parse_existing_time(
+        previous, "started_at_utc"
+    )
     if args.status == "claim" and not started_at:
         started_at = event_time
     heartbeat_at = event_time
     eta_at = parse_utc(args.eta, "eta") or parse_existing_time(previous, "eta_utc")
-    message_ref = normalize_message_ref(project_root, args.message_ref) if args.message_ref else sanitize_text(previous.get("message_ref") if previous else "")
-    depends_on = sanitize_text(args.depends_on) or sanitize_text(previous.get("depends_on") if previous else "")
-    handoff_to = sanitize_text(args.handoff_to) or sanitize_text(previous.get("handoff_to") if previous else "")
-    eta_confidence = parse_float_string(args.eta_confidence, sanitize_text(previous.get("eta_confidence") if previous else ""))
+    message_ref = (
+        normalize_message_ref(project_root, args.message_ref)
+        if args.message_ref
+        else sanitize_text(previous.get("message_ref") if previous else "")
+    )
+    depends_on = sanitize_text(args.depends_on) or sanitize_text(
+        previous.get("depends_on") if previous else ""
+    )
+    handoff_to = sanitize_text(args.handoff_to) or sanitize_text(
+        previous.get("handoff_to") if previous else ""
+    )
+    eta_confidence = parse_float_string(
+        args.eta_confidence,
+        sanitize_text(previous.get("eta_confidence") if previous else ""),
+    )
     notes = sanitize_text(args.notes)
 
     if args.status in {"heartbeat", "progress"}:
         previous_lease = parse_existing_time(previous, "lease_expires_at_utc")
-        if previous.get("status") not in ACTIVE_STATUSES or not previous_lease or previous_lease <= event_time:
-            raise SystemExit("heartbeat and progress require a non-stale active task; create a new claim instead")
+        if (
+            previous.get("status") not in ACTIVE_STATUSES
+            or not previous_lease
+            or previous_lease <= event_time
+        ):
+            raise SystemExit(
+                "heartbeat and progress require a non-stale active task; create a new claim instead"
+            )
 
     overlapping = [
         row
         for row in latest.values()
-        if row.get("task_id") != task_id and folders_overlap(folder_relpath, sanitize_text(row.get("folder_relpath", ".")))
+        if row.get("task_id") != task_id
+        and folders_overlap(
+            folder_relpath, sanitize_text(row.get("folder_relpath", "."))
+        )
     ]
 
     auto_events: list[dict[str, str]] = []
@@ -343,7 +420,9 @@ def append_event(args: argparse.Namespace) -> AppendResult:
                         access_mode=sanitize_text(row.get("access_mode")),
                         status="stale_reclaim",
                         summary=sanitize_text(row.get("summary")),
-                        started_at=parse_utc(row.get("started_at_utc"), "started_at_utc"),
+                        started_at=parse_utc(
+                            row.get("started_at_utc"), "started_at_utc"
+                        ),
                         heartbeat_at=event_time,
                         eta_at=parse_utc(row.get("eta_utc"), "eta_utc"),
                         lease_expires_at=None,
@@ -359,7 +438,10 @@ def append_event(args: argparse.Namespace) -> AppendResult:
     active_conflicts = [
         row
         for row in overlapping
-        if is_nonstale_active(row, event_time) and not access_modes_compatible(access_mode, sanitize_text(row.get("access_mode")))
+        if is_nonstale_active(row, event_time)
+        and not access_modes_compatible(
+            access_mode, sanitize_text(row.get("access_mode"))
+        )
     ]
 
     if active_conflicts:
@@ -372,7 +454,8 @@ def append_event(args: argparse.Namespace) -> AppendResult:
             agent_id=sanitize_text(args.agent_id),
             access_mode=access_mode,
             status="conflict",
-            summary=summary or sanitize_text(previous.get("summary") if previous else ""),
+            summary=summary
+            or sanitize_text(previous.get("summary") if previous else ""),
             started_at=started_at or event_time,
             heartbeat_at=event_time,
             eta_at=eta_at,
@@ -386,9 +469,13 @@ def append_event(args: argparse.Namespace) -> AppendResult:
         )
         rows_to_write = [*auto_events, conflict_event]
         append_rows(ledger_path, rows_to_write)
-        return AppendResult(event=conflict_event, auto_events=auto_events, outcome="conflict")
+        return AppendResult(
+            event=conflict_event, auto_events=auto_events, outcome="conflict"
+        )
 
-    lease_minutes = args.lease_minutes if args.lease_minutes is not None else DEFAULT_LEASE_MINUTES
+    lease_minutes = (
+        args.lease_minutes if args.lease_minutes is not None else DEFAULT_LEASE_MINUTES
+    )
     lease_expires_at = None
     completed_at = None
 
@@ -444,7 +531,9 @@ def snapshot(args: argparse.Namespace) -> dict[str, Any]:
     blocked_tasks = [task for task in tasks if task["derived_state"] == "blocked"]
     stale_tasks = [task for task in tasks if task["derived_state"] == "stale"]
     handoffs = [task for task in tasks if task["derived_state"] == "handoff"]
-    closed_tasks = [task for task in tasks if task["derived_state"] in {"done", "abandon"}]
+    closed_tasks = [
+        task for task in tasks if task["derived_state"] in {"done", "abandon"}
+    ]
     conflicts = [task for task in tasks if task["derived_state"] == "conflict"]
 
     folder_owners: dict[str, list[dict[str, str]]] = {}
@@ -475,7 +564,9 @@ def snapshot(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Manage the append-only gateway agent ledger.")
+    parser = argparse.ArgumentParser(
+        description="Manage the append-only gateway agent ledger."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     append_parser = subparsers.add_parser("append", help="Append a ledger event.")
@@ -498,7 +589,9 @@ def build_parser() -> argparse.ArgumentParser:
     append_parser.add_argument("--eta-confidence", type=float)
     append_parser.add_argument("--notes")
 
-    snapshot_parser = subparsers.add_parser("snapshot", help="Show current derived task state.")
+    snapshot_parser = subparsers.add_parser(
+        "snapshot", help="Show current derived task state."
+    )
     snapshot_parser.add_argument("--project-root", required=True)
     snapshot_parser.add_argument("--reference-time")
 

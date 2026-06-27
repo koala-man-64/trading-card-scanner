@@ -96,7 +96,9 @@ def load_payload(args: argparse.Namespace) -> Dict[str, Any]:
 
     raw = sys.stdin.read().strip()
     if not raw:
-        raise ValueError("No event payload supplied. Use --event-file, --event-json, or stdin.")
+        raise ValueError(
+            "No event payload supplied. Use --event-file, --event-json, or stdin."
+        )
     return json.loads(raw)
 
 
@@ -163,7 +165,9 @@ def normalize_payload(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
             f"event_type must be one of: {', '.join(sorted(APPROVED_EVENT_TYPES))}."
         )
     if event["status"] not in APPROVED_STATUSES:
-        raise ValueError(f"status must be one of: {', '.join(sorted(APPROVED_STATUSES))}.")
+        raise ValueError(
+            f"status must be one of: {', '.join(sorted(APPROVED_STATUSES))}."
+        )
     if event["schema_version"] != 1:
         raise ValueError("schema_version must be 1.")
 
@@ -191,8 +195,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to the JSONL log file. Defaults to ./agent_io_audit.jsonl",
     )
     input_group = parser.add_mutually_exclusive_group()
-    input_group.add_argument("--event-file", help="Path to a JSON file containing one event object.")
-    input_group.add_argument("--event-json", help="Inline JSON object containing one event.")
+    input_group.add_argument(
+        "--event-file", help="Path to a JSON file containing one event object."
+    )
+    input_group.add_argument(
+        "--event-json", help="Inline JSON object containing one event."
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",

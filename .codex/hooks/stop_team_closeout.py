@@ -144,7 +144,9 @@ def main() -> int:
     has_blocker = contains_any(normalized, BLOCKER_MARKERS)
     if needs_git_hygiene and not has_change:
         missing.append("what changed")
-    if (has_change or needs_git_hygiene) and not contains_any(normalized, VALIDATION_MARKERS):
+    if (has_change or needs_git_hygiene) and not contains_any(
+        normalized, VALIDATION_MARKERS
+    ):
         missing.append("validation run or explicit not-run reason")
     if needs_git_hygiene and "git-hygiene-orchestrator" not in normalized:
         missing.append(GIT_HYGIENE_FINISH_REQUIREMENT)
@@ -166,11 +168,17 @@ def main() -> int:
             "(commit, push, pull request, merge/completion) or exact blocker"
         )
 
-    if has_blocker and not ("next action" in normalized or "remaining" in normalized or "left" in normalized):
+    if has_blocker and not (
+        "next action" in normalized or "remaining" in normalized or "left" in normalized
+    ):
         missing.append("exact next action for incomplete work")
 
     if missing:
-        reason = "Before finishing, complete the team closeout summary: " + "; ".join(missing) + "."
+        reason = (
+            "Before finishing, complete the team closeout summary: "
+            + "; ".join(missing)
+            + "."
+        )
         return emit_json(block(reason))
     return 0
 

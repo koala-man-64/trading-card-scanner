@@ -191,7 +191,9 @@ def classify_work_kind(text: str) -> str:
 
 def requires_finish_workflow(text: str) -> bool:
     kind = classify_work_kind(text)
-    return kind in {"finish", "implementation"} or contains_any_text(text, CHANGE_MARKERS)
+    return kind in {"finish", "implementation"} or contains_any_text(
+        text, CHANGE_MARKERS
+    )
 
 
 def requires_tracking(text: str) -> bool:
