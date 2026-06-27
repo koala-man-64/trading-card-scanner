@@ -6,7 +6,11 @@ from azure.storage.blob import BlobServiceClient
 from .helpers import get_storage_connection
 
 
-def test_local_settings_sets_azure_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_environment_sets_azure_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "AZURE_STORAGE_CONNECTION_STRING",
+        "UseDevelopmentStorage=true",
+    )
     connection = get_storage_connection(monkeypatch)
     assert os.environ.get("AZURE_STORAGE_CONNECTION_STRING") == connection
 

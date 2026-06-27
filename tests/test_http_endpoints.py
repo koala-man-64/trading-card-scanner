@@ -9,9 +9,11 @@ from urllib.parse import parse_qs, urlparse
 import azure.functions as func
 import pytest
 from azure.core.exceptions import ResourceNotFoundError
+from PIL import Image
 
 import function_app
 from card_processor.layout_types import LayoutAnalysisResult, LayoutElement
+from card_processor.upload_results import UploadBatchResult
 
 
 class _StubRequest:
@@ -27,6 +29,12 @@ class _StubRequest:
 
     def get_body(self) -> bytes:
         return self._body
+
+
+def _png_bytes() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10), color="white").save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class _StubBlob:
@@ -139,6 +147,9 @@ class _StubContainerClient:
             last_modified_map=self._last_modified_map,
         )
 
+    def get_container_properties(self):
+        return {"name": self.container_name}
+
 
 def test_resolve_auth_level_defaults_and_validation() -> None:
     default = func.AuthLevel.FUNCTION
@@ -173,19 +184,17 @@ def test_build_gallery_image_url_public() -> None:
         container,
         "processed/card.jpg",
         category="processed",
-        auth_code=None,
         use_public_urls=True,
     )
     assert url.endswith("/processed/card.jpg")
 
 
-def test_build_gallery_image_url_proxy_includes_code() -> None:
+def test_build_gallery_image_url_proxy_does_not_include_code() -> None:
     container = _StubContainerClient()
     url = function_app._build_gallery_image_url(
         container,
         "processed/card one.jpg",
         category="processed",
-        auth_code="abc123",
         use_public_urls=False,
     )
     parsed = urlparse(url)
@@ -193,7 +202,7 @@ def test_build_gallery_image_url_proxy_includes_code() -> None:
     qs = parse_qs(parsed.query)
     assert qs["name"] == ["processed/card one.jpg"]
     assert qs["category"] == ["processed"]
-    assert qs["code"] == ["abc123"]
+    assert "code" not in qs
 
 
 def test_list_blob_images_builds_payloads() -> None:
@@ -208,7 +217,6 @@ def test_list_blob_images_builds_payloads() -> None:
         container,
         "processed",
         category="processed",
-        auth_code="code",
         use_public_urls=False,
     )
 
@@ -236,7 +244,6 @@ def test_list_blob_images_filters_by_since() -> None:
         container,
         "processed",
         category="processed",
-        auth_code=None,
         use_public_urls=False,
         since=since,
     )
@@ -277,7 +284,14 @@ def test_gallery_images_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None
     assert payload["prefix"] == ""
     assert payload["blobs"][0]["name"] == "processed/a.jpg"
     assert payload["blobs"][0]["url"].startswith("/api/gallery/image?")
+    assert "code=" not in payload["blobs"][0]["url"]
     assert payload["next_since"] == function_app._format_rfc3339(last_modified)
+
+
+def test_gallery_images_invalid_since_returns_400() -> None:
+    req = _StubRequest(params={"category": "processed", "since": "not-a-date"})
+    resp = function_app.gallery_images(req)
+    assert resp.status_code == 400
 
 
 def test_gallery_page_contains_gallery_markup() -> None:
@@ -388,6 +402,18 @@ def test_health_returns_ok() -> None:
     assert resp.get_body() == b"OK"
 
 
+def test_ready_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    container = _StubContainerClient()
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+    resp = function_app.ready(_StubRequest())
+    payload = json.loads(resp.get_body().decode("utf-8"))
+    assert resp.status_code == 200
+    assert payload["ready"] is True
+    assert payload["components"]["storage"]["ok"] is True
+
+
 def test_analyze_layout_missing_body_returns_400() -> None:
     resp = function_app.analyze_layout(_StubRequest(body=b""))
     assert resp.status_code == 400
@@ -416,7 +442,7 @@ def test_analyze_layout_serializes_response(monkeypatch: pytest.MonkeyPatch) -> 
         lambda *_, **__: result,
     )
 
-    resp = function_app.analyze_layout(_StubRequest(body=b"image", params={}))
+    resp = function_app.analyze_layout(_StubRequest(body=_png_bytes(), params={}))
     payload = json.loads(resp.get_body().decode("utf-8"))
 
     assert resp.status_code == 200
@@ -441,8 +467,32 @@ def test_analyze_layout_sets_207_on_errors(monkeypatch: pytest.MonkeyPatch) -> N
         lambda *_, **__: result,
     )
 
-    resp = function_app.analyze_layout(_StubRequest(body=b"image", params={}))
+    resp = function_app.analyze_layout(_StubRequest(body=_png_bytes(), params={}))
     assert resp.status_code == 207
+
+
+def test_analyze_layout_invalid_numeric_param_returns_400() -> None:
+    resp = function_app.analyze_layout(
+        _StubRequest(body=_png_bytes(), params={"conf": "not-a-number"})
+    )
+    assert resp.status_code == 400
+
+
+def test_analyze_layout_disallowed_model_returns_400() -> None:
+    resp = function_app.analyze_layout(
+        _StubRequest(body=_png_bytes(), params={"model_id": "someone/else"})
+    )
+    assert resp.status_code == 400
+
+
+def test_analyze_layout_oversized_content_length_returns_413() -> None:
+    resp = function_app.analyze_layout(
+        _StubRequest(
+            body=_png_bytes(),
+            headers={"content-length": str(11 * 1024 * 1024)},
+        )
+    )
+    assert resp.status_code == 413
 
 
 def test_process_image_missing_body_returns_400() -> None:
@@ -464,7 +514,7 @@ def test_process_image_counts_cards_when_output_none(
         function_app.process_utils, "count_cards_in_image_bytes", lambda _: 3
     )
     resp = function_app.process_image(
-        _StubRequest(body=b"image", params={"output": "none"})
+        _StubRequest(body=_png_bytes(), params={"output": "none"})
     )
     payload = json.loads(resp.get_body().decode("utf-8"))
     assert payload["card_count"] == 3
@@ -475,11 +525,11 @@ def test_process_image_returns_json(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         function_app.process_utils,
         "extract_card_crops_from_image_bytes",
-        lambda _: cards,
+        lambda *_, **__: cards,
     )
 
     resp = function_app.process_image(
-        _StubRequest(body=b"image", params={"output": "return", "format": "json"})
+        _StubRequest(body=_png_bytes(), params={"output": "return", "format": "json"})
     )
     payload = json.loads(resp.get_body().decode("utf-8"))
 
@@ -492,11 +542,11 @@ def test_process_image_returns_zip(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         function_app.process_utils,
         "extract_card_crops_from_image_bytes",
-        lambda _: cards,
+        lambda *_, **__: cards,
     )
 
     resp = function_app.process_image(
-        _StubRequest(body=b"image", params={"output": "return", "format": "zip"})
+        _StubRequest(body=_png_bytes(), params={"output": "return", "format": "zip"})
     )
     with zipfile.ZipFile(io.BytesIO(resp.get_body())) as zf:
         names = sorted(zf.namelist())
@@ -509,7 +559,7 @@ def test_process_image_upload_mode_storage_not_configured_returns_500(
 ) -> None:
     monkeypatch.setattr(function_app, "_get_storage_clients", lambda: (None, None))
     resp = function_app.process_image(
-        _StubRequest(body=b"image", params={"output": "upload"})
+        _StubRequest(body=_png_bytes(), params={"output": "upload"})
     )
     assert resp.status_code == 500
 
@@ -521,21 +571,24 @@ def test_process_image_upload_mode_returns_payload(
     monkeypatch.setattr(
         function_app.process_utils,
         "extract_card_crops_from_image_bytes",
-        lambda _: cards,
+        lambda *_, **__: cards,
     )
 
     captured: Dict[str, Union[str, int]] = {}
 
-    def _fake_upload(container, source_name, cards, folder=None) -> None:
+    def _fake_upload(container, source_name, cards, folder=None) -> UploadBatchResult:
         captured["source_name"] = source_name
         captured["folder"] = folder or ""
         captured["count"] = len(cards)
+        result = UploadBatchResult(attempted=len(cards))
+        result.record_success(f"{folder}/my_photo_1.jpg")
+        return result
 
     monkeypatch.setattr(function_app, "_get_storage_clients", lambda: (None, object()))
     monkeypatch.setattr(function_app, "_upload_processed_cards", _fake_upload)
 
     req = _StubRequest(
-        body=b"image",
+        body=_png_bytes(),
         params={"output": "upload", "name": "my photo.jpg"},
     )
     resp = function_app.process_image(req)
@@ -546,4 +599,5 @@ def test_process_image_upload_mode_returns_payload(
     assert payload["uploaded"]["folder"] == function_app._build_processed_card_folder(
         "my photo.jpg"
     )
+    assert payload["uploaded"]["failed"] == []
     assert captured["count"] == 1

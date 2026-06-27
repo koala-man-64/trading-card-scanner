@@ -2,13 +2,18 @@
     "info": {
         "_postman_id": "9c72dd5b-1d2d-4d0d-9e30-0f47a60ee8c7",
         "name": "Trading Card Scanner",
-        "description": "Select an environment (Local or Azure).\n\nHealth\n- GET {{baseUrl}}/api/health\n\nProcess Image (Body: binary image)\n- POST {{baseUrl}}/api/process (default: output=none)\n- POST {{baseUrl}}/api/process?output=return&format=zip\n- POST {{baseUrl}}/api/process?output=return&format=json\n- POST {{baseUrl}}/api/process?output=upload&name=sample.jpg\n\nLayout Analysis (Body: binary image)\n- POST {{baseUrl}}/api/layout (defaults: model_variant=nano, imgsz=1280, conf=0.25, iou=0.5, extract_crops=true, crop_format=png)\n- Example: POST {{baseUrl}}/api/layout?model_variant=small&imgsz=1280&conf=0.3&iou=0.5&extract_crops=true&crop_format=jpeg\n",
+        "description": "Select an environment (Local or Azure). Azure endpoints are expected to be protected by Microsoft Entra EasyAuth; use a browser session or bearer token instead of function-key query parameters.\n\nHealth\n- GET {{baseUrl}}/api/health\n- GET {{baseUrl}}/api/ready\n\nProcess Image (Body: binary image)\n- POST {{baseUrl}}/api/process (default: output=none)\n- POST {{baseUrl}}/api/process?output=return&format=zip\n- POST {{baseUrl}}/api/process?output=return&format=json\n- POST {{baseUrl}}/api/process?output=upload&name=sample.jpg\n\nLayout Analysis (Body: binary image)\n- POST {{baseUrl}}/api/layout (defaults: model_variant=nano, imgsz=1280, conf=0.25, iou=0.5, extract_crops=true, crop_format=png)\n- Example: POST {{baseUrl}}/api/layout?model_variant=small&imgsz=1280&conf=0.3&iou=0.5&extract_crops=true&crop_format=jpeg\n",
         "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
     },
     "item": [
         {
             "name": "Health",
             "request": {"method": "GET", "header": [], "url": "{{baseUrl}}/api/health"},
+            "response": []
+        },
+        {
+            "name": "Ready",
+            "request": {"method": "GET", "header": [], "url": "{{baseUrl}}/api/ready"},
             "response": []
         },
         {

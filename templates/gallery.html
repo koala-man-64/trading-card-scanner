@@ -250,8 +250,6 @@
     <script>
         const refreshSeconds = __GALLERY_REFRESH_SECONDS__;
         const defaultCategory = "processed";
-        const urlParams = new URLSearchParams(window.location.search);
-        const authCode = urlParams.get("code");
         let currentCategory = defaultCategory;
         let requestSequence = 0;
         const galleryEl = document.getElementById("gallery");
@@ -571,9 +569,6 @@
 
         function buildApiUrl(path, params) {
             const query = new URLSearchParams(params);
-            if (authCode) {
-                query.set("code", authCode);
-            }
             const qs = query.toString();
             return qs ? `${path}?${qs}` : path;
         }

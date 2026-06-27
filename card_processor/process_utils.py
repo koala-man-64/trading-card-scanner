@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -153,7 +153,9 @@ def count_cards_in_image_bytes(image_bytes: bytes) -> int:
     return len(elements)
 
 
-def extract_card_crops_from_image_bytes(image_bytes: bytes) -> List[Tuple[str, bytes]]:
+def extract_card_crops_from_image_bytes(
+    image_bytes: bytes, *, max_crops: Optional[int] = None
+) -> List[Tuple[str, bytes]]:
     """Decode an image, detect cards, and return cropped card JPEG bytes.
 
     Crops are returned with a stable, generated label (e.g., ``card_1``) rather than
@@ -170,6 +172,8 @@ def extract_card_crops_from_image_bytes(image_bytes: bytes) -> List[Tuple[str, b
     elements = [el for el in analysis.elements if _is_card_label(el.label)]
     elements.sort(key=lambda el: (el.bbox_xyxy[1], el.bbox_xyxy[0]))
     for element in elements:
+        if max_crops is not None and len(results) >= max_crops:
+            break
         if not element.crop_bytes:
             logger.warning("Missing crop bytes for detected card")
             continue

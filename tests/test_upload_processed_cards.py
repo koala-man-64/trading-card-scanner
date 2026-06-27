@@ -7,9 +7,9 @@ There are two categories of tests in this file:
    - Use in-memory stub "container clients" that record upload calls.
    - Validate naming, overwrite behavior, and error handling.
 
-2) Integration tests (real Azure Blob Storage):
-   - Require `AZURE_STORAGE_CONNECTION_STRING` (preferred) or a value in
-     `local.settings.json` under `Values.AZURE_STORAGE_CONNECTION_STRING`.
+2) Integration tests (Azurite by default, real Azure only when explicitly opted in):
+   - Require `AZURE_STORAGE_CONNECTION_STRING`.
+   - Real Azure Storage requires `ALLOW_REAL_AZURE_STORAGE_TESTS=1`.
    - Write blobs to real containers so you can inspect output.
 
 Environment knobs for integration tests:
@@ -136,7 +136,7 @@ def test_upload_processed_cards_builds_names_and_uploads():
     # a real sample input file to avoid "fake" paths.
     source_path = str(INPUT_SAMPLES / "sample_input_1.jpg")
 
-    _upload_processed_cards(container, source_path, cards)
+    result = _upload_processed_cards(container, source_path, cards)
 
     # Ensure the blob names are deterministic and sanitized.
     assert [name for name, *_ in container.uploads] == [
@@ -152,6 +152,9 @@ def test_upload_processed_cards_builds_names_and_uploads():
         cards[1][1],
         cards[2][1],
     ]
+    assert result.attempted == 3
+    assert result.uploaded_count == 3
+    assert result.failed_count == 0
 
 
 def test_upload_processed_cards_logs_and_continues_on_error(caplog):
@@ -163,11 +166,14 @@ def test_upload_processed_cards_logs_and_continues_on_error(caplog):
     source_path = str(INPUT_SAMPLES / "sample_input_2.jpg")
 
     with caplog.at_level(logging.ERROR):
-        _upload_processed_cards(container, source_path, cards)
+        result = _upload_processed_cards(container, source_path, cards)
 
     # The first upload fails; the second should still succeed with idx=2 naming.
     assert "Failed to upload processed card Card One" in caplog.text
     assert container.uploads == [("sample_input_2_2.jpg", second_bytes, True)]
+    assert result.status_code() == 207
+    assert result.uploaded_blobs == ["sample_input_2_2.jpg"]
+    assert result.failed_count == 1
 
 
 @pytest.mark.integration
@@ -183,9 +189,7 @@ def test_upload_processed_cards_writes_blobs_to_storage(
     # - `_upload_processed_cards` with a real ContainerClient
     connection = get_storage_connection(monkeypatch)
     if not connection:
-        pytest.skip(
-            "AZURE_STORAGE_CONNECTION_STRING not configured in environment or local.settings.json"
-        )
+        pytest.skip("AZURE_STORAGE_CONNECTION_STRING not configured in environment")
 
     service_client = BlobServiceClient.from_connection_string(connection)
     container_name = _output_container_name()
@@ -210,7 +214,10 @@ def test_upload_processed_cards_writes_blobs_to_storage(
             ("unknown", _read_output_sample("sample_output_2.jpg")),
         ]
         source_path = str(INPUT_SAMPLES / "sample_input_1.jpg")
-        _upload_processed_cards(container_client, source_path, cards, folder=folder)
+        result = _upload_processed_cards(
+            container_client, source_path, cards, folder=folder
+        )
+        assert result.failed_count == 0
 
         # Verify expected blob names are present.
         blobs = {
@@ -254,9 +261,7 @@ def test_upload_parsing_results_to_input_container_under_card_folder(
     #   prefix:    <TEST_CARD_FOLDER>-<unique>/...
     connection = get_storage_connection(monkeypatch)
     if not connection:
-        pytest.skip(
-            "AZURE_STORAGE_CONNECTION_STRING not configured in environment or local.settings.json"
-        )
+        pytest.skip("AZURE_STORAGE_CONNECTION_STRING not configured in environment")
 
     service_client = BlobServiceClient.from_connection_string(connection)
     input_container = service_client.get_container_client("input")

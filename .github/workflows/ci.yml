@@ -21,8 +21,6 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
-      AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
       DELETE_TEST_OUTPUT_CONTAINER: "1"
       TEST_OUTPUT_CONTAINER: processed-tests-ci
       TEST_CARD_FOLDER: ci-${{ github.run_id }}
@@ -32,6 +30,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -45,10 +50,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip check
 
       - name: Start Azurite emulator
         run: |
+          AZURITE_ACCOUNT_NAME=devstoreaccount1
+          AZURITE_ACCOUNT_KEY="$(openssl rand -base64 64 | tr -d '\n')"
+          AZURITE_CONNECTION_STRING="DefaultEndpointsProtocol=http;AccountName=${AZURITE_ACCOUNT_NAME};AccountKey=${AZURITE_ACCOUNT_KEY};BlobEndpoint=http://127.0.0.1:10000/${AZURITE_ACCOUNT_NAME};QueueEndpoint=http://127.0.0.1:10001/${AZURITE_ACCOUNT_NAME};TableEndpoint=http://127.0.0.1:10002/${AZURITE_ACCOUNT_NAME};"
+          {
+            echo "AZURE_STORAGE_CONNECTION_STRING=${AZURITE_CONNECTION_STRING}"
+            echo "AzureWebJobsStorage=${AZURITE_CONNECTION_STRING}"
+          } >> "$GITHUB_ENV"
           docker run --name azurite -d --rm \
+            -e "AZURITE_ACCOUNTS=${AZURITE_ACCOUNT_NAME}:${AZURITE_ACCOUNT_KEY}" \
             -p 10000:10000 -p 10001:10001 -p 10002:10002 \
             mcr.microsoft.com/azure-storage/azurite \
             azurite --skipApiVersionCheck \
@@ -63,15 +77,14 @@ jobs:
           ruff format . --check
           mypy . --ignore-missing-imports
 
-      - name: Normalize test directory casing
-        run: |
-          if [ -d Tests ]; then
-            mv Tests tests
-          fi
-
       - name: Run tests
         run: python -m pytest -q
 
+      - name: Build and inspect release artifact
+        run: |
+          python scripts/package_release.py build release.zip
+          python scripts/package_release.py check release.zip
+
       - name: Stop Azurite emulator
         if: always()
-        run: docker stop azurite
+        run: docker stop azurite || true
