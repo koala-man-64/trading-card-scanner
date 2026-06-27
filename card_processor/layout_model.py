@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import torch
 
@@ -62,7 +62,7 @@ def get_model(model_variant: Optional[str] = None) -> ModelBundle:
             return _MODEL_CACHE[model_id]
         device = _resolve_device()
         model = DetrForObjectDetection.from_pretrained(model_id)
-        model.to(device)
+        cast(Any, model).to(device)
         model.eval()
         processor = DetrImageProcessor.from_pretrained(model_id)
         bundle = ModelBundle(
