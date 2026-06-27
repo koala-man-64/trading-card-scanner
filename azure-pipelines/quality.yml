@@ -1,0 +1,104 @@
+name: trading-card-scanner-quality-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  PYTHON_VERSION: "3.10"
+  TEST_OUTPUT_CONTAINER: processed-tests-ci
+  TEST_CARD_FOLDER: ci-$(Build.BuildId)
+  DELETE_TEST_OUTPUT_CONTAINER: "1"
+
+stages:
+  - stage: Quality
+    displayName: Quality
+    jobs:
+      - job: Python
+        displayName: Python validation
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "$(PYTHON_VERSION)"
+
+          - script: |
+              set -euo pipefail
+              python --version
+              python - <<'PY'
+              import os
+              import sys
+
+              expected = os.environ["PYTHON_VERSION"]
+              actual = f"{sys.version_info.major}.{sys.version_info.minor}"
+              if actual != expected:
+                  raise SystemExit(f"Expected Python {expected}, got {sys.version.split()[0]}")
+              PY
+            displayName: Validate Python version
+
+          - script: |
+              set -euo pipefail
+              python -m venv "$(Pipeline.Workspace)/scanner-quality-venv"
+              . "$(Pipeline.Workspace)/scanner-quality-venv/bin/activate"
+              python -m pip install --upgrade pip
+              python -m pip install -r requirements.txt
+              python -m pip check
+            displayName: Install dependencies
+
+          - script: |
+              set -euo pipefail
+              docker rm -f azurite-trading-card-scanner >/dev/null 2>&1 || true
+              account_name="devstoreaccount1"
+              account_key="$(openssl rand -base64 64 | tr -d '\n')"
+              connection_string="DefaultEndpointsProtocol=http;AccountName=${account_name};AccountKey=${account_key};BlobEndpoint=http://127.0.0.1:10000/${account_name};QueueEndpoint=http://127.0.0.1:10001/${account_name};TableEndpoint=http://127.0.0.1:10002/${account_name};"
+              echo "##vso[task.setvariable variable=AZURE_STORAGE_CONNECTION_STRING;issecret=true]${connection_string}"
+              echo "##vso[task.setvariable variable=AzureWebJobsStorage;issecret=true]${connection_string}"
+              docker run --name azurite-trading-card-scanner -d --rm \
+                -e "AZURITE_ACCOUNTS=${account_name}:${account_key}" \
+                -p 10000:10000 -p 10001:10001 -p 10002:10002 \
+                mcr.microsoft.com/azure-storage/azurite \
+                azurite --skipApiVersionCheck \
+                --blobHost 0.0.0.0 --blobPort 10000 \
+                --queueHost 0.0.0.0 --queuePort 10001 \
+                --tableHost 0.0.0.0 --tablePort 10002
+              sleep 2
+            displayName: Start randomized Azurite
+
+          - script: |
+              set -euo pipefail
+              . "$(Pipeline.Workspace)/scanner-quality-venv/bin/activate"
+              ruff check .
+              ruff format . --check
+              mypy . --ignore-missing-imports
+              python -m pytest -q
+            displayName: Run lint, type checks, and tests
+            env:
+              AZURE_STORAGE_CONNECTION_STRING: $(AZURE_STORAGE_CONNECTION_STRING)
+              AzureWebJobsStorage: $(AzureWebJobsStorage)
+              DELETE_TEST_OUTPUT_CONTAINER: $(DELETE_TEST_OUTPUT_CONTAINER)
+              TEST_OUTPUT_CONTAINER: $(TEST_OUTPUT_CONTAINER)
+              TEST_CARD_FOLDER: $(TEST_CARD_FOLDER)
+
+          - script: |
+              set -euo pipefail
+              . "$(Pipeline.Workspace)/scanner-quality-venv/bin/activate"
+              python scripts/package_release.py build release.zip
+              python scripts/package_release.py check release.zip
+              python -m zipfile -l release.zip
+            displayName: Build and inspect release artifact
+
+          - script: |
+              docker rm -f azurite-trading-card-scanner >/dev/null 2>&1 || true
+            displayName: Stop Azurite
+            condition: always()

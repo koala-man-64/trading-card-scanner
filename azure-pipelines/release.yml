@@ -1,0 +1,64 @@
+name: trading-card-scanner-release-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger: none
+pr: none
+
+resources:
+  pipelines:
+    - pipeline: scannerQuality
+      source: trading-card-scanner-quality
+      branch: main
+      trigger:
+        branches:
+          include:
+            - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  PYTHON_VERSION: "3.10"
+  FUNCTION_APP_NAME: fa-trading-card-scanner-npe
+
+stages:
+  - stage: Release
+    displayName: Build release artifact
+    jobs:
+      - job: Package
+        displayName: Package Azure Functions artifact
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "$(PYTHON_VERSION)"
+
+          - script: |
+              set -euo pipefail
+              python -m venv "$(Pipeline.Workspace)/scanner-release-venv"
+              . "$(Pipeline.Workspace)/scanner-release-venv/bin/activate"
+              python -m pip install --upgrade pip
+              python -m pip install -r requirements.txt
+              python -m pip check
+            displayName: Install dependencies
+
+          - script: |
+              set -euo pipefail
+              . "$(Pipeline.Workspace)/scanner-release-venv/bin/activate"
+              ruff check .
+              ruff format . --check
+              mypy . --ignore-missing-imports
+              python scripts/package_release.py build release.zip
+              python scripts/package_release.py check release.zip
+              mkdir -p artifacts/release
+              mv release.zip artifacts/release/release.zip
+              python scripts/azure_devops/write_release_manifest.py \
+                --artifact artifacts/release/release.zip \
+                --output artifacts/release/release-manifest.json \
+                --function-app-name "$(FUNCTION_APP_NAME)"
+              python scripts/azure_devops/assert_clean_artifacts.py artifacts/release
+            displayName: Validate and package release
+
+          - publish: artifacts/release
+            artifact: scanner-release

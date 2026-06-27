@@ -1,19 +1,21 @@
 # Runtime dependencies
+--extra-index-url https://download.pytorch.org/whl/cpu
 azure-functions
 azure-storage-blob
 azure-identity
 opencv-python
 numpy
-Pillow
-huggingface-hub
-torch
-transformers
+Pillow>=12.2.0
+huggingface-hub>=0.36.2,<1
+torch==2.10.0+cpu
+torchvision==0.25.0+cpu
+transformers>=4.53.0,<5
 timm
 # TODO: Remove ultralytics once DETR rollout is stable.
 ultralytics
 
 # Dev/test dependencies
-pytest
+pytest>=9.0.3
 pytest-cov
 ruff
 mypy
