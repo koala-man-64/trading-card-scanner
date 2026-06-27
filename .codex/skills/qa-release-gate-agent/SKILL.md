@@ -9,14 +9,16 @@ description: "Risk-based testing, verification, and CI/CD quality gating. Use wh
 
 Design risk-based test plans, execute verification, and validate CI/CD quality gates with release-readiness evidence.
 
-## Required Output
+## Output Discipline
 
-- Produce the "QA Verification Report" artifact in the exact format specified in `references/agent.md`.
+- Default routine output: `Done`, `Evidence`, `Next/Risk`.
+- Produce the full "QA Verification Report" only for release gates, meaningful verification tasks, CI/CD quality-gate reviews, or explicit requests.
+- When the full report is not required, include checks run, confidence, and remaining test risk in the compact response.
 
 ## Workflow
 
 - Read `references/agent.md` before responding.
-- Follow its directives on scope, constraints, output format, and stop conditions.
+- Follow its directives on scope, constraints, conditional output format, and stop conditions.
 - Identify test coverage risks and CI/CD gate gaps for the scoped changes.
 - Inspect pipeline configs when CI/CD is in scope and note required checks, artifacts, caching, and failure signals.
 - Provide a release-readiness gate decision with monitoring/rollback considerations.
