@@ -75,17 +75,18 @@ def test_process_blob_bytes_uploads_processed_cards(
     monkeypatch.setattr(
         function_app.process_utils,
         "extract_card_crops_from_image_bytes",
-        lambda _: [("Cloud Card", sample_bytes)],
+        lambda *_, **__: [("Cloud Card", sample_bytes)],
     )
     source_path = str(INPUT_SAMPLES / "sample_input_1.jpg")
 
-    function_app._process_blob_bytes(
+    result = function_app._process_blob_bytes(
         source_path,
-        b"blob-bytes",
+        _read_sample("sample_output_1.jpg"),
         container,
     )  # type: ignore
 
     assert container.uploads == [("sample_input_1_1.jpg", sample_bytes, True)]
+    assert result.uploaded_count == 1
 
 
 def test_process_blob_bytes_skips_upload_when_no_cards(
@@ -95,13 +96,13 @@ def test_process_blob_bytes_skips_upload_when_no_cards(
     monkeypatch.setattr(
         function_app.process_utils,
         "extract_card_crops_from_image_bytes",
-        lambda _: [],
+        lambda *_, **__: [],
     )
     source_path = str(INPUT_SAMPLES / "sample_input_1.jpg")
 
     function_app._process_blob_bytes(
         source_path,
-        b"blob-bytes",
+        _read_sample("sample_output_1.jpg"),
         container,
     )  # type: ignore
 

@@ -1,8 +1,13 @@
 local.settings.json
+local.settings.*.json
 
 .python_packages
 .venv/
+venv/
 .env
+.env.*
+!.env.example
+release.zip
 
 __pycache__/
 *.pyc

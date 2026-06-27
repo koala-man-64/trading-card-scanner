@@ -21,8 +21,8 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
-      AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;"
+      AZURE_STORAGE_CONNECTION_STRING: "UseDevelopmentStorage=true"
+      AzureWebJobsStorage: "UseDevelopmentStorage=true"
       DELETE_TEST_OUTPUT_CONTAINER: "1"
       TEST_OUTPUT_CONTAINER: processed-tests-ci
       TEST_CARD_FOLDER: ci-${{ github.run_id }}
@@ -32,6 +32,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -45,6 +50,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip check
 
       - name: Start Azurite emulator
         run: |
@@ -63,14 +69,13 @@ jobs:
           ruff format . --check
           mypy . --ignore-missing-imports
 
-      - name: Normalize test directory casing
-        run: |
-          if [ -d Tests ]; then
-            mv Tests tests
-          fi
-
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Build and inspect release artifact
+        run: |
+          python scripts/package_release.py build release.zip
+          python scripts/package_release.py check release.zip
 
       - name: Stop Azurite emulator
         if: always()

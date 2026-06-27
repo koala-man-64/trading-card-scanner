@@ -9,6 +9,7 @@ from .image_io import load_rgb_image
 from .layout_crops import attach_crops
 from .layout_infer import infer_layout
 from .layout_model import get_model
+from .settings import ScannerSettings
 from .layout_post import assign_reading_order, to_layout_elements
 from .layout_types import LayoutAnalysisResult
 
@@ -45,6 +46,7 @@ def analyze_layout_from_image_bytes(
     iou: float = 0.5,
     extract_crops: bool = True,
     crop_format: str = "png",
+    settings: Optional[ScannerSettings] = None,
 ) -> LayoutAnalysisResult:
     """Analyze document layout from raw image bytes."""
     errors = []
@@ -62,7 +64,7 @@ def analyze_layout_from_image_bytes(
     width, height = img.size
 
     try:
-        bundle = get_model(model_variant)
+        bundle = get_model(model_variant, settings=settings)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to load model %s", model_variant)
         return LayoutAnalysisResult(

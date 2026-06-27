@@ -1,1 +1,17 @@
+.env
+.env.*
+.git
+.github
+.mypy_cache
+.pytest_cache
+.ruff_cache
 .venv
+__pycache__
+local.settings.json
+local.settings.*.json
+postman
+tests
+venv
+*.pyc
+*.pyo
+release.zip

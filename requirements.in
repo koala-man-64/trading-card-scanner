@@ -1,0 +1,19 @@
+# Runtime dependencies
+azure-functions
+azure-storage-blob
+azure-identity
+opencv-python
+numpy
+Pillow
+huggingface-hub
+torch
+transformers
+timm
+# TODO: Remove ultralytics once DETR rollout is stable.
+ultralytics
+
+# Dev/test dependencies
+pytest
+pytest-cov
+ruff
+mypy

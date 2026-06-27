@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import re
-import uuid
 import zipfile
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -22,8 +21,24 @@ from azure.storage.blob import (
     ContainerClient,
 )
 
+from card_processor.api_responses import error_response, json_response
 from card_processor import process_utils
 from card_processor.layout_analysis import analyze_layout_from_image_bytes
+from card_processor.layout_model import ModelResolutionError, resolve_model_id
+from card_processor.request_validation import (
+    RequestValidationError,
+    normalize_image_format,
+    parse_layout_params,
+    parse_process_params,
+    parse_since_param,
+    read_bounded_blob,
+    read_bounded_http_body,
+    set_pillow_decompression_limit,
+    validate_image_bytes,
+)
+from card_processor.settings import ScannerSettings, load_settings
+from card_processor.telemetry import correlation_id_from_request, log_event
+from card_processor.upload_results import UploadBatchResult
 
 try:
     from azure.identity import DefaultAzureCredential
@@ -31,6 +46,7 @@ except ImportError:
     DefaultAzureCredential = None  # type: ignore
 
 app = func.FunctionApp()
+logger = logging.getLogger(__name__)
 
 # Define container names from environment variables with defaults
 PROCESSED_CONTAINER_NAME = os.environ.get("PROCESSED_CONTAINER_NAME", "processed")
@@ -108,11 +124,20 @@ GALLERY_AUTH_LEVEL = _resolve_auth_level(
 HEALTH_AUTH_LEVEL = _resolve_auth_level(
     os.environ.get("HEALTH_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
 )
+READY_AUTH_LEVEL = _resolve_auth_level(
+    os.environ.get("READY_AUTH_LEVEL"), DEFAULT_AUTH_LEVEL
+)
 
 
-def _get_storage_clients() -> Tuple[
-    Optional[BlobServiceClient], Optional[ContainerClient]
-]:
+def _settings() -> ScannerSettings:
+    settings = load_settings()
+    set_pillow_decompression_limit(settings)
+    return settings
+
+
+def _get_storage_clients() -> (
+    Tuple[Optional[BlobServiceClient], Optional[ContainerClient]]
+):
     """Return storage service and processed container clients if configured."""
     service_client = _get_storage_service_client()
     if not service_client:
@@ -241,7 +266,6 @@ def _build_gallery_image_url(
     blob_name: str,
     *,
     category: str,
-    auth_code: Optional[str],
     use_public_urls: bool,
 ) -> str:
     if use_public_urls:
@@ -249,8 +273,6 @@ def _build_gallery_image_url(
         return blob_client.url
 
     params = {"name": blob_name, "category": category}
-    if auth_code:
-        params["code"] = auth_code
     return f"/api/gallery/image?{urlencode(params)}"
 
 
@@ -259,7 +281,6 @@ def _list_blob_images(
     prefix: str,
     *,
     category: str,
-    auth_code: Optional[str],
     use_public_urls: bool,
     since: Optional[datetime] = None,
 ) -> Tuple[List[Dict[str, object]], Optional[datetime]]:
@@ -293,7 +314,6 @@ def _list_blob_images(
                     container_client,
                     blob.name,
                     category=category,
-                    auth_code=auth_code,
                     use_public_urls=use_public_urls,
                 ),
             }
@@ -350,10 +370,12 @@ def _upload_processed_cards(
     source_name: str,
     cards: Iterable[Tuple[str, bytes]],
     folder: Optional[str] = None,
-) -> None:
+) -> UploadBatchResult:
     """Upload processed card crops to the processed container."""
+    result = UploadBatchResult()
     prefix = _sanitize_blob_folder_name(folder) if folder else None
     for idx, (name, img_bytes) in enumerate(cards, 1):
+        result.attempted += 1
         blob_name = _build_processed_card_name(source_name, idx)
         if prefix:
             blob_name = f"{prefix}/{blob_name}"
@@ -361,9 +383,12 @@ def _upload_processed_cards(
             processed_container.upload_blob(
                 name=blob_name, data=img_bytes, overwrite=True
             )
+            result.record_success(blob_name)
             logging.info("Uploaded processed card %s as %s", name, blob_name)
         except Exception as exc:
+            result.record_failure(name, blob_name, exc)
             logging.error("Failed to upload processed card %s: %s", name, exc)
+    return result
 
 
 def _save_processed_cards_to_folder(
@@ -389,14 +414,23 @@ def _save_processed_cards_to_folder(
 
 def _process_blob_bytes(
     source_name: str, blob_bytes: bytes, processed_container: _UploadContainerClient
-) -> None:
+) -> UploadBatchResult:
     """Run card processing pipeline for a blob and upload results."""
-    cards = process_utils.extract_card_crops_from_image_bytes(blob_bytes)
+    settings = _settings()
+    validate_image_bytes(blob_bytes, settings)
+    cards = process_utils.extract_card_crops_from_image_bytes(
+        blob_bytes, max_crops=settings.max_crops
+    )
     if not cards:
         logging.info("No cards detected in %s", source_name)
-        return
+        return UploadBatchResult()
 
-    _upload_processed_cards(processed_container, source_name, cards)
+    result = _upload_processed_cards(processed_container, source_name, cards)
+    if result.has_failures:
+        raise RuntimeError(
+            f"Failed to upload {result.failed_count} of {result.attempted} cards"
+        )
+    return result
 
 
 @app.function_name(name="ProcessBlob")
@@ -422,10 +456,10 @@ def process_blob(inputBlob: func.InputStream) -> None:
         return
 
     try:
-        blob_bytes = inputBlob.read()
+        blob_bytes = read_bounded_blob(inputBlob, _settings())
     except Exception as exc:
         logging.error("Failed to read blob %s: %s", inputBlob.name, exc)
-        return
+        raise
 
     _process_blob_bytes(inputBlob.name, blob_bytes, processed_container)
 
@@ -464,21 +498,29 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
             status_code=400,
         )
 
+    try:
+        since = parse_since_param(req.params.get("since"))
+    except RequestValidationError as exc:
+        correlation_id = correlation_id_from_request(req)
+        return error_response(
+            str(exc),
+            status_code=exc.status_code,
+            code=exc.code,
+            correlation_id=correlation_id,
+        )
+
     _, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
     if not container_client:
         return func.HttpResponse(
             "Storage is not configured. Set AzureWebJobsStorage.", status_code=500
         )
 
-    auth_code = req.params.get("code")
-    since = _parse_since_param(req.params.get("since"))
     gallery_container = cast(_GalleryContainerClient, container_client)
     try:
         blobs, latest_modified = _list_blob_images(
             gallery_container,
             prefix,
             category=category,
-            auth_code=auth_code,
             use_public_urls=GALLERY_USE_PUBLIC_URLS,
             since=since,
         )
@@ -580,6 +622,73 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse("OK", status_code=200)
 
 
+@app.function_name(name="Ready")
+@app.route(route="ready", methods=["GET"], auth_level=READY_AUTH_LEVEL)
+def ready(req: func.HttpRequest) -> func.HttpResponse:
+    """Readiness endpoint for configuration, storage, and model registry checks."""
+    correlation_id = correlation_id_from_request(req)
+    components: dict[str, object] = {}
+    ready_status = True
+
+    try:
+        settings = _settings()
+        settings_errors = settings.validate()
+    except Exception as exc:
+        settings_errors = [str(exc)]
+        settings = None
+    if settings_errors:
+        ready_status = False
+        components["settings"] = {"ok": False, "errors": settings_errors}
+    else:
+        components["settings"] = {"ok": True}
+
+    if settings is not None:
+        components["models"] = {
+            "ok": True,
+            "allowed_model_ids": sorted(settings.allowed_model_ids),
+            "model_aliases": settings.model_aliases,
+        }
+    else:
+        ready_status = False
+        components["models"] = {"ok": False, "errors": ["settings unavailable"]}
+
+    _, container_client = _get_container_client(PROCESSED_CONTAINER_NAME)
+    if not container_client:
+        ready_status = False
+        components["storage"] = {
+            "ok": False,
+            "container": PROCESSED_CONTAINER_NAME,
+            "error": "container client unavailable",
+        }
+    else:
+        try:
+            container_client.get_container_properties()
+            components["storage"] = {
+                "ok": True,
+                "container": PROCESSED_CONTAINER_NAME,
+            }
+        except Exception as exc:
+            ready_status = False
+            components["storage"] = {
+                "ok": False,
+                "container": PROCESSED_CONTAINER_NAME,
+                "error": str(exc),
+            }
+
+    log_event(
+        logger,
+        logging.INFO if ready_status else logging.WARNING,
+        "readiness_checked",
+        correlation_id=correlation_id,
+        ready=ready_status,
+    )
+    return json_response(
+        {"ready": ready_status, "components": components},
+        status_code=200 if ready_status else 503,
+        correlation_id=correlation_id,
+    )
+
+
 def _parse_bool_param(value: Optional[str], *, default: bool) -> bool:
     if value is None:
         return default
@@ -590,30 +699,65 @@ def _parse_bool_param(value: Optional[str], *, default: bool) -> bool:
 @app.route(route="layout", methods=["POST"], auth_level=DEFAULT_AUTH_LEVEL)
 def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
     """Run document layout analysis on uploaded image bytes."""
-    image_bytes = req.get_body() or b""
-    if not image_bytes:
-        return func.HttpResponse(
-            "Provide image bytes in the request body.", status_code=400
+    correlation_id = correlation_id_from_request(req)
+    settings = _settings()
+    try:
+        image_bytes = read_bounded_http_body(req, settings)
+        if not image_bytes:
+            raise RequestValidationError("Provide image bytes in the request body.")
+        validate_image_bytes(image_bytes, settings)
+        params = parse_layout_params(req.params)
+        resolve_model_id(params.model_variant, settings)
+    except RequestValidationError as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "layout_request_rejected",
+            correlation_id=correlation_id,
+            code=exc.code,
+            status_code=exc.status_code,
         )
-
-    model_id = (req.params.get("model_id") or "").strip()
-    model_variant = (req.params.get("model_variant") or "").strip().lower()
-    if model_id:
-        model_variant = model_id
-    imgsz = int(req.params.get("imgsz") or 1280)
-    conf = float(req.params.get("conf") or 0.25)
-    iou = float(req.params.get("iou") or 0.5)
-    extract_crops = _parse_bool_param(req.params.get("extract_crops"), default=True)
-    crop_format = (req.params.get("crop_format") or "png").strip().lower()
+        return error_response(
+            str(exc),
+            status_code=exc.status_code,
+            code=exc.code,
+            correlation_id=correlation_id,
+        )
+    except ModelResolutionError as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "layout_model_rejected",
+            correlation_id=correlation_id,
+            model=params.model_variant,
+        )
+        return error_response(
+            str(exc),
+            status_code=400,
+            code="model_not_allowed",
+            correlation_id=correlation_id,
+        )
 
     result = analyze_layout_from_image_bytes(
         image_bytes,
-        model_variant=model_variant,
-        imgsz=imgsz,
-        conf=conf,
-        iou=iou,
-        extract_crops=extract_crops,
-        crop_format=crop_format,
+        model_variant=params.model_variant,
+        imgsz=params.imgsz,
+        conf=params.conf,
+        iou=params.iou,
+        extract_crops=params.extract_crops,
+        crop_format=normalize_image_format(params.crop_format),
+        settings=settings,
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "layout_request_completed",
+        correlation_id=correlation_id,
+        image_width=result.image_width,
+        image_height=result.image_height,
+        element_count=len(result.elements),
+        error_count=len(result.errors),
+        model_id=result.model_info.get("model_id"),
     )
 
     def _serialize_element(idx, el):
@@ -642,10 +786,10 @@ def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
         "errors": result.errors,
     }
     status_code = 200 if not result.errors else 207
-    return func.HttpResponse(
-        body=json.dumps(body),
+    return json_response(
+        body,
         status_code=status_code,
-        mimetype="application/json",
+        correlation_id=correlation_id,
     )
 
 
@@ -661,80 +805,87 @@ def process_image(req: func.HttpRequest) -> func.HttpResponse:
       - format=zip|json (default: zip; applies when output=return)
     Uploads are stored under a folder prefix derived from the input name.
     """
-    output_mode = (req.params.get("output") or "").strip().lower()
-    output_format = (req.params.get("format") or "").strip().lower()
-
-    if not output_mode:
-        output_mode = "return" if output_format else "none"
-
-    if output_mode in {"return", "bytes"}:
-        output_mode = "return"
-    elif output_mode in {"upload", "cloud"}:
-        output_mode = "upload"
-    elif output_mode in {"none", "count"}:
-        output_mode = "none"
-    else:
-        return func.HttpResponse(
-            "Unsupported output. Use 'none', 'return', or 'upload'.",
-            status_code=400,
+    correlation_id = correlation_id_from_request(req)
+    settings = _settings()
+    try:
+        params = parse_process_params(req.params)
+        image_bytes = read_bounded_http_body(req, settings)
+        if not image_bytes:
+            raise RequestValidationError("Provide image bytes in the request body.")
+        validate_image_bytes(image_bytes, settings)
+    except RequestValidationError as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "process_request_rejected",
+            correlation_id=correlation_id,
+            code=exc.code,
+            status_code=exc.status_code,
+        )
+        return error_response(
+            str(exc),
+            status_code=exc.status_code,
+            code=exc.code,
+            correlation_id=correlation_id,
         )
 
-    image_bytes = req.get_body() or b""
-
-    if not image_bytes:
-        return func.HttpResponse(
-            "Provide image bytes in the request body.", status_code=400
-        )
-
-    if output_mode == "none":
+    if params.output_mode == "none":
         payload: dict[str, object] = {
             "card_count": process_utils.count_cards_in_image_bytes(image_bytes)
         }
-        return func.HttpResponse(
-            body=json.dumps(payload),
-            status_code=200,
-            mimetype="application/json",
-        )
+        return json_response(payload, status_code=200, correlation_id=correlation_id)
 
-    cards = process_utils.extract_card_crops_from_image_bytes(image_bytes)
-
-    if output_mode == "upload":
+    if params.output_mode == "upload":
         _, processed_container = _get_storage_clients()
         if not processed_container:
-            return func.HttpResponse(
+            return error_response(
                 "Storage is not configured. Set AzureWebJobsStorage.",
                 status_code=500,
+                code="storage_not_configured",
+                correlation_id=correlation_id,
             )
+        cards = process_utils.extract_card_crops_from_image_bytes(
+            image_bytes, max_crops=settings.max_crops
+        )
 
         source_name = (
             (req.params.get("name") or "").strip()
             or req.headers.get("x-file-name")
-            or f"upload_{uuid.uuid4().hex}.jpg"
+            or f"upload_{correlation_id}.jpg"
         )
         folder = _build_processed_card_folder(source_name)
-        _upload_processed_cards(processed_container, source_name, cards, folder=folder)
-        blob_names = [
-            f"{folder}/{_build_processed_card_name(source_name, idx)}"
-            for idx in range(1, len(cards) + 1)
-        ]
+        upload_result = _upload_processed_cards(
+            processed_container, source_name, cards, folder=folder
+        )
+        upload_payload = upload_result.to_payload()
         payload = {
             "card_count": len(cards),
             "uploaded": {
                 "container": PROCESSED_CONTAINER_NAME,
                 "folder": folder,
-                "blobs": blob_names,
+                **upload_payload,
             },
         }
-        return func.HttpResponse(
-            body=json.dumps(payload),
-            status_code=200,
-            mimetype="application/json",
+        log_event(
+            logger,
+            logging.INFO if not upload_result.has_failures else logging.ERROR,
+            "process_upload_completed",
+            correlation_id=correlation_id,
+            card_count=len(cards),
+            uploaded_count=upload_result.uploaded_count,
+            failed_count=upload_result.failed_count,
+        )
+        return json_response(
+            payload,
+            status_code=upload_result.status_code(),
+            correlation_id=correlation_id,
         )
 
-    if not output_format:
-        output_format = "zip"
+    cards = process_utils.extract_card_crops_from_image_bytes(
+        image_bytes, max_crops=settings.max_crops
+    )
 
-    if output_format == "json":
+    if params.output_format == "json":
         payload = {
             "card_count": len(cards),
             "cards": [
@@ -742,16 +893,7 @@ def process_image(req: func.HttpRequest) -> func.HttpResponse:
                 for idx, (name, img_bytes) in enumerate(cards, 1)
             ],
         }
-        return func.HttpResponse(
-            body=json.dumps(payload),
-            status_code=200,
-            mimetype="application/json",
-        )
-
-    if output_format != "zip":
-        return func.HttpResponse(
-            "Unsupported format. Use 'zip' or 'json'.", status_code=400
-        )
+        return json_response(payload, status_code=200, correlation_id=correlation_id)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -759,12 +901,22 @@ def process_image(req: func.HttpRequest) -> func.HttpResponse:
             member_name = _sanitize_zip_member_name(name or "card")
             zf.writestr(f"{idx:02d}_{member_name}.jpg", img_bytes)
 
+    zip_bytes = buf.getvalue()
+    if len(zip_bytes) > settings.max_return_bytes:
+        return error_response(
+            "Processed result exceeds the configured response size limit.",
+            status_code=413,
+            code="response_too_large",
+            correlation_id=correlation_id,
+        )
+
     headers = {
         "Content-Disposition": "attachment; filename=processed_cards.zip",
         "X-Card-Count": str(len(cards)),
+        "x-correlation-id": correlation_id,
     }
     return func.HttpResponse(
-        body=buf.getvalue(),
+        body=zip_bytes,
         status_code=200,
         mimetype="application/zip",
         headers=headers,
