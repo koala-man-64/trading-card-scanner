@@ -89,7 +89,7 @@ The intended Azure posture is Microsoft Entra EasyAuth at the Function App bound
 
 ## Cloud Testing (CI/CD)
 
-Azure DevOps is the target CI/CD source of truth. Pipeline definitions live in
+Azure DevOps is the CI/CD source of truth. Pipeline definitions live in
 `azure-pipelines/`:
 
 - `quality.yml` validates pull requests and `main`.
@@ -114,7 +114,7 @@ The quality pipeline performs these steps:
 Deployment uses the same Python 3.10 runtime standard before uploading the
 clean `release.zip` artifact to Azure Functions.
 
-GitHub Actions remain in the repository during migration. Disable them only
-after Azure Repos pull request validation, release, deploy, `/api/health`, and
-`/api/ready` smoke checks prove parity. See
-`docs/azure-devops-migration.md` for the cutover checklist.
+GitHub Actions workflow definitions have been removed after Azure Repos pull
+request validation, release, deploy, and keyed `/api/health` plus `/api/ready`
+smoke checks proved parity. See `docs/azure-devops-migration.md` for the
+cutover record.

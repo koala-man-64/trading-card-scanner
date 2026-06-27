@@ -1,13 +1,14 @@
 # Azure DevOps Migration
 
-`trading-card-scanner` is migrating to Azure Repos, Azure Pipelines, and Azure Boards in the `rdprokes/AdaptiveAssetAllocation` project.
+`trading-card-scanner` uses Azure Repos, Azure Pipelines, and Azure Boards in the `rdprokes/AdaptiveAssetAllocation` project.
 
 ## Source Control
 
 - Azure Repo: `https://dev.azure.com/rdprokes/AdaptiveAssetAllocation/_git/trading-card-scanner`
 - Default branch: `main`
-- GitHub remains active until Azure quality, security, release, deploy, and smoke checks prove parity.
-- Do not disable `.github/workflows/*` until the Azure `deploy-npe` evidence shows the merged source SHA is deployed to `fa-trading-card-scanner-npe`.
+- Azure Repos is canonical.
+- GitHub should be kept only as a read-only mirror or archived copy.
+- GitHub Actions workflow files were removed after Azure quality, security, release, deploy, and smoke checks proved parity.
 
 ## Pipelines
 
@@ -35,7 +36,7 @@ Do not store publish profiles, client secrets, storage keys, Function keys, `.en
 
 ## Branch Policies
 
-After the first successful manual quality and security runs, protect `main` with:
+Protect `main` with:
 
 - Required work item linking
 - Minimum one reviewer
@@ -43,13 +44,22 @@ After the first successful manual quality and security runs, protect `main` with
 - Build validation for `trading-card-scanner-security`
 - No direct pushes
 
-## Cutover Criteria
+## Cutover Record
 
-GitHub Actions can be disabled only after all checks are true:
+GitHub Actions were disabled in the repository after these Azure checks passed:
 
 - Azure Repo default branch is `refs/heads/main`.
 - Azure PR validation passes on quality and security.
 - Release publishes `scanner-release` with `release.zip` and `release-manifest.json`.
 - Deploy NPE publishes `scanner-deploy-evidence`.
 - Function App tags include matching source SHA, release run, deploy run, and artifact SHA.
-- `/api/health` and `/api/ready` smoke checks pass.
+- Keyed `/api/health` and `/api/ready` smoke checks pass.
+
+The first proven Azure deployment used:
+
+- Source SHA: `81b3d6f91dfa0b215c40acaf95843df396558623`
+- Quality run: `9645`
+- Security run: `9644`
+- Release run: `9646`
+- Deploy run: `9648`
+- Function App: `fa-trading-card-scanner-npe`
