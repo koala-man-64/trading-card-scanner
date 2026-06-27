@@ -84,7 +84,23 @@ stages:
                       default_host="$(python - <<'PY' "${app_json}"
                       import json
                       import sys
-                      print(json.loads(sys.argv[1])["defaultHostName"])
+
+                      app = json.loads(sys.argv[1])
+                      props = app.get("properties") or {}
+                      candidates = [
+                          app.get("defaultHostName"),
+                          props.get("defaultHostName"),
+                          *(app.get("hostNames") or []),
+                          *(props.get("hostNames") or []),
+                          *(app.get("enabledHostNames") or []),
+                          *(props.get("enabledHostNames") or []),
+                      ]
+                      for host in candidates:
+                          if host and ".scm." not in host:
+                              print(host)
+                              break
+                      else:
+                          raise SystemExit("Could not determine Function App default host name")
                       PY
                       )"
                       base_url="${FUNCTION_APP_BASE_URL:-}"
