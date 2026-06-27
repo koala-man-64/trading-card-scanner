@@ -20,6 +20,17 @@ def normalize_connection_string(connection: str) -> str:
     return connection
 
 
+def is_emulated_storage_connection(connection: str) -> bool:
+    """Return true when the connection targets local Azurite storage."""
+    normalized = connection.lower()
+    return (
+        "usedevelopmentstorage=true" in normalized
+        or "blobendpoint=http://127.0.0.1:10000/" in normalized
+        or "blobendpoint=http://localhost:10000/" in normalized
+        or ".blob.localhost:10000" in normalized
+    )
+
+
 def get_storage_connection(monkeypatch: Optional[pytest.MonkeyPatch] = None) -> str:
     """Resolve storage connection string from environment only.
 
@@ -32,7 +43,7 @@ def get_storage_connection(monkeypatch: Optional[pytest.MonkeyPatch] = None) -> 
 
     normalized = normalize_connection_string(env_connection)
     if (
-        "usedevelopmentstorage=true" not in normalized.lower()
+        not is_emulated_storage_connection(normalized)
         and os.environ.get("ALLOW_REAL_AZURE_STORAGE_TESTS") != "1"
     ):
         pytest.skip("real Azure Storage tests require ALLOW_REAL_AZURE_STORAGE_TESTS=1")

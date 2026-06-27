@@ -10,8 +10,6 @@ env:
   PYTHON_VERSION: "3.10"
   HUGGINGFACE_HUB_TOKEN: ${{ secrets.HUGGINGFACE_HUB_TOKEN }}
   HF_TOKEN: ${{ secrets.HUGGINGFACE_HUB_TOKEN }}
-  AZURE_STORAGE_CONNECTION_STRING: "UseDevelopmentStorage=true"
-  AzureWebJobsStorage: "UseDevelopmentStorage=true"
   TEST_OUTPUT_CONTAINER: processed-tests-ci
   TEST_CARD_FOLDER: deploy-${{ github.run_id }}
 
@@ -52,7 +50,15 @@ jobs:
 
       - name: Start Azurite emulator
         run: |
+          AZURITE_ACCOUNT_NAME=devstoreaccount1
+          AZURITE_ACCOUNT_KEY="$(openssl rand -base64 64 | tr -d '\n')"
+          AZURITE_CONNECTION_STRING="DefaultEndpointsProtocol=http;AccountName=${AZURITE_ACCOUNT_NAME};AccountKey=${AZURITE_ACCOUNT_KEY};BlobEndpoint=http://127.0.0.1:10000/${AZURITE_ACCOUNT_NAME};QueueEndpoint=http://127.0.0.1:10001/${AZURITE_ACCOUNT_NAME};TableEndpoint=http://127.0.0.1:10002/${AZURITE_ACCOUNT_NAME};"
+          {
+            echo "AZURE_STORAGE_CONNECTION_STRING=${AZURITE_CONNECTION_STRING}"
+            echo "AzureWebJobsStorage=${AZURITE_CONNECTION_STRING}"
+          } >> "$GITHUB_ENV"
           docker run --name azurite -d --rm \
+            -e "AZURITE_ACCOUNTS=${AZURITE_ACCOUNT_NAME}:${AZURITE_ACCOUNT_KEY}" \
             -p 10000:10000 -p 10001:10001 -p 10002:10002 \
             mcr.microsoft.com/azure-storage/azurite \
             azurite --skipApiVersionCheck \
