@@ -26,6 +26,7 @@ FORBIDDEN_PARTS = {
     "venv",
 }
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo"}
+SITE_PACKAGES_PREFIX = Path(".python_packages/lib/site-packages")
 
 
 def _is_forbidden(path: Path) -> bool:
@@ -49,13 +50,25 @@ def iter_package_files(root: Path) -> Iterable[Path]:
                 yield path
 
 
-def build_release(root: Path, output: Path) -> None:
+def iter_site_package_files(site_packages: Path) -> Iterable[tuple[Path, Path]]:
+    for path in sorted(site_packages.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = SITE_PACKAGES_PREFIX / path.relative_to(site_packages)
+        if not _is_forbidden(rel):
+            yield path, rel
+
+
+def build_release(root: Path, output: Path, site_packages: Path | None = None) -> None:
     if output.exists():
         output.unlink()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in iter_package_files(root):
-            rel = path.relative_to(root).as_posix()
-            zf.write(path, rel)
+            arcname = path.relative_to(root).as_posix()
+            zf.write(path, arcname)
+        if site_packages is not None:
+            for path, rel in iter_site_package_files(site_packages):
+                zf.write(path, rel.as_posix())
 
 
 def inspect_release(artifact: Path) -> list[str]:
@@ -82,13 +95,18 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     build = sub.add_parser("build")
     build.add_argument("artifact", type=Path)
+    build.add_argument(
+        "--site-packages",
+        type=Path,
+        help="Installed site-packages directory to include for Azure Functions Python.",
+    )
     check = sub.add_parser("check")
     check.add_argument("artifact", type=Path)
     args = parser.parse_args(argv)
 
     root = Path(__file__).resolve().parents[1]
     if args.command == "build":
-        build_release(root, args.artifact)
+        build_release(root, args.artifact, args.site_packages)
         return 0
 
     errors = inspect_release(args.artifact)

@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
@@ -56,10 +56,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--function-key")
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--attempts", type=int, default=6)
+    parser.add_argument("--delay", type=float, default=10.0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
 
-    results = run_smoke(args.base_url, args.function_key, args.timeout)
+    results: list[dict[str, Any]] = []
+    for attempt in range(1, args.attempts + 1):
+        results = run_smoke(args.base_url, args.function_key, args.timeout)
+        if all(200 <= result["status"] < 300 for result in results):
+            break
+        if attempt < args.attempts:
+            sleep(args.delay)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
 

@@ -49,7 +49,8 @@ stages:
               ruff check .
               ruff format . --check
               mypy . --ignore-missing-imports
-              python scripts/package_release.py build release.zip
+              site_packages="$(python -c 'import site; print(site.getsitepackages()[0])')"
+              python scripts/package_release.py build release.zip --site-packages "${site_packages}"
               python scripts/package_release.py check release.zip
               mkdir -p artifacts/release
               mv release.zip artifacts/release/release.zip
