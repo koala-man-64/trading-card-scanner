@@ -1,0 +1,84 @@
+name: trading-card-scanner-security-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+schedules:
+  - cron: "30 9 * * 1"
+    displayName: Weekly scanner security scan
+    branches:
+      include:
+        - main
+    always: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  PYTHON_VERSION: "3.10"
+  GITLEAKS_IMAGE: zricethezav/gitleaks:v8.24.3
+  PIP_AUDIT_VERSION: "2.9.0"
+
+stages:
+  - stage: Security
+    displayName: Security
+    jobs:
+      - job: PythonSecurity
+        displayName: Secret and dependency scanning
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "$(PYTHON_VERSION)"
+
+          - script: |
+              set -euo pipefail
+              mkdir -p artifacts/security
+              docker run --rm \
+                -v "$(Build.SourcesDirectory):/repo" \
+                "$(GITLEAKS_IMAGE)" detect \
+                --source /repo \
+                --redact \
+                --report-format json \
+                --report-path /repo/artifacts/security/gitleaks-report.json \
+                --exit-code 1
+            displayName: Run full-history secret scan
+
+          - script: |
+              set -euo pipefail
+              python -m venv "$(Pipeline.Workspace)/scanner-security-venv"
+              . "$(Pipeline.Workspace)/scanner-security-venv/bin/activate"
+              python -m pip install --upgrade pip
+              python -m pip install "pip-audit==$(PIP_AUDIT_VERSION)"
+              ignore_args=()
+              while IFS= read -r vuln_id || [ -n "${vuln_id}" ]; do
+                case "${vuln_id}" in
+                  ""|\#*) continue ;;
+                  *) ignore_args+=(--ignore-vuln "${vuln_id}") ;;
+                esac
+              done < security/pip-audit-ignore.txt
+              pip-audit --requirement requirements.txt \
+                --format json \
+                --output artifacts/security/pip-audit-report.json \
+                "${ignore_args[@]}"
+              cp security/pip-audit-ignore.txt artifacts/security/pip-audit-ignore.txt
+            displayName: Run dependency audit
+
+          - script: |
+              set -euo pipefail
+              python scripts/azure_devops/assert_clean_artifacts.py artifacts
+            displayName: Verify security artifacts are clean
+            condition: always()
+
+          - publish: artifacts
+            artifact: scanner-security
+            condition: always()

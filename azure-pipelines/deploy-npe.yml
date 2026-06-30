@@ -1,0 +1,180 @@
+name: trading-card-scanner-deploy-npe-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger: none
+pr: none
+
+resources:
+  pipelines:
+    - pipeline: scannerRelease
+      source: trading-card-scanner-release
+      branch: main
+      trigger:
+        branches:
+          include:
+            - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: vg-trading-card-scanner-npe
+  - name: AZURE_SERVICE_CONNECTION
+    value: sc-trading-card-scanner-npe-deploy
+  - name: FUNCTION_APP_NAME
+    value: fa-trading-card-scanner-npe
+  - name: FUNCTION_APP_TYPE
+    value: functionAppLinux
+  - name: PYTHON_VERSION
+    value: "3.10"
+
+stages:
+  - stage: DeployNpe
+    displayName: Deploy NPE
+    jobs:
+      - deployment: DeployFunctionApp
+        displayName: Deploy Function App
+        environment: trading-card-scanner-npe
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  fetchDepth: 0
+
+                - download: scannerRelease
+                  artifact: scanner-release
+
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: "$(PYTHON_VERSION)"
+
+                - task: AzureFunctionApp@2
+                  displayName: Deploy release.zip to Azure Functions
+                  inputs:
+                    azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
+                    appType: "$(FUNCTION_APP_TYPE)"
+                    appName: "$(FUNCTION_APP_NAME)"
+                    package: "$(Pipeline.Workspace)/scannerRelease/scanner-release/release.zip"
+                    deploymentMethod: zipDeploy
+
+                - task: AzureCLI@2
+                  displayName: Capture deploy provenance and smoke test
+                  inputs:
+                    azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      : "${FUNCTION_APP_RESOURCE_GROUP:?Set FUNCTION_APP_RESOURCE_GROUP in vg-trading-card-scanner-npe.}"
+                      manifest="$(Pipeline.Workspace)/scannerRelease/scanner-release/release-manifest.json"
+                      mkdir -p artifacts/deploy
+
+                      app_json="$(az functionapp show \
+                        --name "$(FUNCTION_APP_NAME)" \
+                        --resource-group "${FUNCTION_APP_RESOURCE_GROUP}" \
+                        -o json)"
+                      printf '%s\n' "${app_json}" > artifacts/deploy/functionapp.json
+
+                      resource_id="$(python - <<'PY' "${app_json}"
+                      import json
+                      import sys
+                      print(json.loads(sys.argv[1])["id"])
+                      PY
+                      )"
+                      default_host="$(python - <<'PY' "${app_json}"
+                      import json
+                      import sys
+
+                      app = json.loads(sys.argv[1])
+                      props = app.get("properties") or {}
+                      candidates = [
+                          app.get("defaultHostName"),
+                          props.get("defaultHostName"),
+                          *(app.get("hostNames") or []),
+                          *(props.get("hostNames") or []),
+                          *(app.get("enabledHostNames") or []),
+                          *(props.get("enabledHostNames") or []),
+                      ]
+                      for host in candidates:
+                          if host and ".scm." not in host:
+                              print(host)
+                              break
+                      else:
+                          raise SystemExit("Could not determine Function App default host name")
+                      PY
+                      )"
+                      base_url="${FUNCTION_APP_BASE_URL:-}"
+                      if [ -z "${base_url}" ] || [ "${base_url}" = '$(FUNCTION_APP_BASE_URL)' ]; then
+                        base_url="https://${default_host}"
+                      fi
+                      source_sha="$(python - <<'PY' "${manifest}"
+                      import json
+                      import sys
+                      from pathlib import Path
+                      print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["source_sha"])
+                      PY
+                      )"
+                      artifact_sha="$(python - <<'PY' "${manifest}"
+                      import json
+                      import sys
+                      from pathlib import Path
+                      print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["artifact_sha256"])
+                      PY
+                      )"
+
+                      az resource update --ids "${resource_id}" \
+                        --set tags.tcs_source_sha="${source_sha}" \
+                              tags.tcs_release_run_id="${RESOURCES_PIPELINE_SCANNERRELEASE_RUNID:-}" \
+                              tags.tcs_release_run_number="${RESOURCES_PIPELINE_SCANNERRELEASE_RUNNAME:-}" \
+                              tags.tcs_deploy_run_id="${BUILD_BUILDID}" \
+                              tags.tcs_deploy_run_number="${BUILD_BUILDNUMBER}" \
+                              tags.tcs_artifact_sha256="${artifact_sha}"
+
+                      az functionapp config appsettings list \
+                        --name "$(FUNCTION_APP_NAME)" \
+                        --resource-group "${FUNCTION_APP_RESOURCE_GROUP}" \
+                        --query "[].name" -o tsv > artifacts/deploy/app-setting-names.txt
+
+                      function_key="$(az functionapp keys list \
+                        --name "$(FUNCTION_APP_NAME)" \
+                        --resource-group "${FUNCTION_APP_RESOURCE_GROUP}" \
+                        --query "functionKeys.default" -o tsv 2>/dev/null || true)"
+                      smoke_args=(--base-url "${base_url}" --output artifacts/deploy/smoke-results.json)
+                      if [ -n "${function_key}" ]; then
+                        smoke_args+=(--function-key "${function_key}")
+                      fi
+                      python scripts/azure_devops/smoke_function_app.py "${smoke_args[@]}"
+
+                      python - <<'PY' "${manifest}"
+                      import json
+                      import os
+                      import sys
+                      from pathlib import Path
+
+                      manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+                      payload = {
+                          "function_app_name": os.environ["FUNCTION_APP_NAME"],
+                          "function_app_resource_group": os.environ["FUNCTION_APP_RESOURCE_GROUP"],
+                          "release_source_sha": manifest["source_sha"],
+                          "artifact_sha256": manifest["artifact_sha256"],
+                          "release_pipeline": os.environ.get("RESOURCES_PIPELINE_SCANNERRELEASE_DEFINITIONNAME", "trading-card-scanner-release"),
+                          "release_run_id": os.environ.get("RESOURCES_PIPELINE_SCANNERRELEASE_RUNID", ""),
+                          "release_run_number": os.environ.get("RESOURCES_PIPELINE_SCANNERRELEASE_RUNNAME", ""),
+                          "deploy_pipeline": os.environ.get("BUILD_DEFINITIONNAME", "trading-card-scanner-deploy-npe"),
+                          "deploy_run_id": os.environ.get("BUILD_BUILDID", ""),
+                          "deploy_run_number": os.environ.get("BUILD_BUILDNUMBER", ""),
+                      }
+                      Path("artifacts/deploy/deploy-provenance.json").write_text(
+                          json.dumps(payload, indent=2) + "\n",
+                          encoding="utf-8",
+                      )
+                      PY
+
+                      python scripts/azure_devops/assert_clean_artifacts.py artifacts/deploy
+                  env:
+                    FUNCTION_APP_NAME: $(FUNCTION_APP_NAME)
+                    FUNCTION_APP_RESOURCE_GROUP: $(FUNCTION_APP_RESOURCE_GROUP)
+
+                - publish: artifacts/deploy
+                  artifact: scanner-deploy-evidence
+                  condition: always()

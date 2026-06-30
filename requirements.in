@@ -1,19 +1,21 @@
 # Runtime dependencies
+--extra-index-url https://download.pytorch.org/whl/cpu
 azure-functions
 azure-storage-blob
 azure-identity
 opencv-python
 numpy
-Pillow
-huggingface-hub
-torch
-transformers
+Pillow>=12.2.0
+huggingface-hub>=0.36.2,<1
+torch==2.10.0+cpu
+torchvision==0.25.0+cpu
+transformers>=4.53.0,<5
 # timm provides the ResNet-50 backbone for the DETR detector (use_timm_backbone=True);
 # it is a runtime dependency even though nothing imports it directly.
 timm
 
 # Dev/test dependencies
-pytest
+pytest>=9.0.3
 pytest-cov
 ruff
 mypy

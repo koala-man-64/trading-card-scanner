@@ -1,0 +1,12 @@
+# No stable fixed release available in the pinned Python 3.10 runtime.
+PYSEC-2025-217
+PYSEC-2025-214
+PYSEC-2025-218
+PYSEC-2025-211
+PYSEC-2025-212
+PYSEC-2025-213
+PYSEC-2025-215
+PYSEC-2025-216
+
+# Fixed only by transformers 5.0.0rc3; hold on stable 4.x until a stable 5.x cut is available.
+GHSA-69w3-r845-3855

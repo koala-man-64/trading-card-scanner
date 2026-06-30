@@ -43,3 +43,30 @@ def test_release_inspection_rejects_forbidden_paths(tmp_path) -> None:
         zf.writestr("local.settings.json", "{}")
     errors = inspect_release(artifact)
     assert any("local.settings.json" in error for error in errors)
+
+
+def test_release_package_can_include_python_site_packages(tmp_path) -> None:
+    root = tmp_path / "repo"
+    site_packages = tmp_path / "venv" / "lib" / "python3.10" / "site-packages"
+    package = site_packages / "example_pkg"
+    cache = package / "__pycache__"
+    package.mkdir(parents=True)
+    cache.mkdir()
+    (root).mkdir()
+    (root / "function_app.py").write_text("# app\n", encoding="utf-8")
+    (root / "host.json").write_text("{}\n", encoding="utf-8")
+    (root / "requirements.txt").write_text("example-pkg==1.0.0\n", encoding="utf-8")
+    (package / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (cache / "module.pyc").write_bytes(b"bad")
+
+    artifact = tmp_path / "release.zip"
+    build_release(root, artifact, site_packages)
+
+    with zipfile.ZipFile(artifact) as zf:
+        names = set(zf.namelist())
+    assert ".python_packages/lib/site-packages/example_pkg/__init__.py" in names
+    assert (
+        ".python_packages/lib/site-packages/example_pkg/__pycache__/module.pyc"
+        not in names
+    )
+    assert inspect_release(artifact) == []

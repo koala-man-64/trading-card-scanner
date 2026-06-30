@@ -1,0 +1,23 @@
+# Historical Azurite dev-store sample keys and committed virtualenv false positives.
+# Keep this list fingerprint-specific so new findings still fail the security gate.
+22df6cf495474b9aa323212cb74e8516dba0a47f:.github/workflows/ci.yml:generic-api-key:32
+22df6cf495474b9aa323212cb74e8516dba0a47f:.github/workflows/ci.yml:generic-api-key:33
+231ba098bf61f6f673662627c5912a166a5aca3b:.github/workflows/ci-cd.yml:generic-api-key:44
+231ba098bf61f6f673662627c5912a166a5aca3b:.github/workflows/ci-cd.yml:generic-api-key:45
+2fb8208771776ee17faf0b2a0f13fd5a9947c7e1:TESTING.md:generic-api-key:46
+2fb8208771776ee17faf0b2a0f13fd5a9947c7e1:TESTING.md:generic-api-key:51
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/cv2/gapi/__init__.py:generic-api-key:229
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/cv2/gapi/__init__.py:generic-api-key:234
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/cv2/gapi/__init__.py:generic-api-key:235
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/numpy/random/tests/test_generator_mt19937.py:generic-api-key:23
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/numpy/random/tests/test_generator_mt19937.py:generic-api-key:24
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/numpy/random/tests/test_generator_mt19937.py:generic-api-key:29
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/numpy/random/tests/test_generator_mt19937.py:generic-api-key:30
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/numpy/random/tests/test_generator_mt19937.py:generic-api-key:35
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/numpy/random/tests/test_generator_mt19937.py:generic-api-key:36
+37337885673ed3061fb8a43810b3adf46d6ce5c3:.venv/Lib/site-packages/setuptools/_distutils/msvccompiler.py:generic-api-key:39
+48b5bdf8f100f9d2385c7f10d62571572f87ba9d:.github/workflows/ci.yml:generic-api-key:22
+48b5bdf8f100f9d2385c7f10d62571572f87ba9d:.github/workflows/ci.yml:generic-api-key:23
+6f517b82aaa62d5fd3569955895bc0c1f7e3b984:Tests/test_upload_processed_cards.py:generic-api-key:47
+c1508ff3d2c697929bada58bffda78c2bb724553:.github/workflows/ci.yml:generic-api-key:20
+d5e82ee48a0ef0b36eeafa57becf03c6a0f14bc2:Tests/test_azure_config.py:generic-api-key:14

@@ -89,17 +89,32 @@ The intended Azure posture is Microsoft Entra EasyAuth at the Function App bound
 
 ## Cloud Testing (CI/CD)
 
-The project is configured with a GitHub Actions workflow for continuous integration (CI). The CI pipeline is defined in the `.github/workflows/ci.yml` file.
+Azure DevOps is the CI/CD source of truth. Pipeline definitions live in
+`azure-pipelines/`:
 
-The CI pipeline automatically triggers on pushes and pull requests to `dev` and `main` and performs the following steps:
+- `quality.yml` validates pull requests and `main`.
+- `security.yml` runs secret and dependency scans on pull requests, `main`, and
+  a weekly schedule.
+- `release.yml` packages a clean `release.zip` and release manifest after main
+  quality validation.
+- `deploy-npe.yml` deploys the release artifact to `fa-trading-card-scanner-npe`
+  and publishes smoke-test evidence.
+
+The quality pipeline performs these steps:
 
 1.  Checks out the code.
-2.  Runs a full-history secret scan.
-3.  Sets up Python 3.10.
-4.  Installs pinned dependencies and runs `pip check`.
-5.  Starts an Azurite service to emulate Azure Storage.
-6.  Runs linting, formatting, and type-checking with `ruff` and `mypy`.
-7.  Executes the test suite using `pytest`.
-8.  Builds and inspects the release artifact to ensure local secrets, tests, samples, Postman files, caches, and virtualenvs are excluded.
+2.  Sets up Python 3.10.
+3.  Installs pinned dependencies and runs `pip check`.
+4.  Starts Azurite with a randomized account key.
+5.  Runs linting, formatting, and type-checking with `ruff` and `mypy`.
+6.  Executes the test suite using `pytest`.
+7.  Builds and inspects the release artifact to ensure local secrets, tests,
+    samples, Postman files, caches, and virtualenvs are excluded.
 
-Deployment uses the same Python 3.10 gates before uploading a clean `release.zip` artifact to Azure Functions.
+Deployment uses the same Python 3.10 runtime standard before uploading the
+clean `release.zip` artifact to Azure Functions.
+
+GitHub Actions workflow definitions have been removed after Azure Repos pull
+request validation, release, deploy, and keyed `/api/health` plus `/api/ready`
+smoke checks proved parity. See `docs/azure-devops-migration.md` for the
+cutover record.
