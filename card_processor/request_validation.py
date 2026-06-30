@@ -26,9 +26,9 @@ class RequestValidationError(ValueError):
 
 
 @dataclass(frozen=True)
-class LayoutParams:
+class DetectionParams:
     model_variant: str
-    imgsz: int
+    imgsz: Optional[int]
     conf: float
     iou: float
     extract_crops: bool
@@ -193,16 +193,21 @@ def parse_since_param(value: Optional[str]) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
-def parse_layout_params(params: Mapping[str, str]) -> LayoutParams:
+def parse_detection_params(params: Mapping[str, str]) -> DetectionParams:
     model_id = (params.get("model_id") or "").strip()
     model_variant = (params.get("model_variant") or "").strip()
     if model_id:
         model_variant = model_id
-    return LayoutParams(
+    imgsz_value = params.get("imgsz")
+    if imgsz_value is not None and imgsz_value.strip():
+        imgsz: Optional[int] = parse_int_param(
+            imgsz_value, default=1280, name="imgsz", minimum=128, maximum=4096
+        )
+    else:
+        imgsz = None
+    return DetectionParams(
         model_variant=model_variant,
-        imgsz=parse_int_param(
-            params.get("imgsz"), default=1280, name="imgsz", minimum=128, maximum=4096
-        ),
+        imgsz=imgsz,
         conf=parse_float_param(
             params.get("conf"), default=0.25, name="conf", minimum=0.0, maximum=1.0
         ),

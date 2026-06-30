@@ -1,4 +1,4 @@
-"""Image decoding helpers for layout analysis."""
+"""Image decoding helpers for card detection."""
 
 from __future__ import annotations
 

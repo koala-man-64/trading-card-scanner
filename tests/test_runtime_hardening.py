@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from PIL import Image
 
-from card_processor.layout_model import ModelResolutionError, resolve_model_id
+from card_processor.detection_model import ModelResolutionError, resolve_model_id
 from card_processor.request_validation import (
     RequestValidationError,
     validate_image_bytes,

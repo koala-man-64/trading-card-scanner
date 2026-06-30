@@ -3,6 +3,7 @@ import io
 import json
 import zipfile
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Union
 from urllib.parse import parse_qs, urlparse
 
@@ -12,7 +13,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from PIL import Image
 
 import function_app
-from card_processor.layout_types import LayoutAnalysisResult, LayoutElement
+from card_processor.detection_types import DetectedCard, DetectionResult
 from card_processor.upload_results import UploadBatchResult
 
 
@@ -103,6 +104,45 @@ class _StubBlobClient:
         return _StubDownload(self._data_map[self._name])
 
 
+class _StubPageIterator:
+    """Single-page iterator mimicking azure-storage-blob's by_page() pager."""
+
+    def __init__(self, page_items: List[_StubBlob], next_token: Optional[str]) -> None:
+        self._page_items = page_items
+        self._next_token = next_token
+        self.continuation_token: Optional[str] = None
+        self._yielded = False
+
+    def __iter__(self) -> "_StubPageIterator":
+        return self
+
+    def __next__(self) -> List[_StubBlob]:
+        if self._yielded:
+            raise StopIteration
+        self._yielded = True
+        self.continuation_token = self._next_token
+        return self._page_items
+
+
+class _StubBlobPager:
+    """Iterable list result that also supports continuation-token paging."""
+
+    def __init__(self, blobs: List[_StubBlob], page_size: Optional[int]) -> None:
+        self._blobs = blobs
+        self._page_size = page_size
+
+    def __iter__(self):
+        return iter(self._blobs)
+
+    def by_page(self, continuation_token: Optional[str] = None) -> _StubPageIterator:
+        start = int(continuation_token) if continuation_token else 0
+        size = self._page_size or len(self._blobs)
+        page_items = self._blobs[start : start + size]
+        next_start = start + size
+        next_token = str(next_start) if next_start < len(self._blobs) else None
+        return _StubPageIterator(page_items, next_token)
+
+
 class _StubContainerClient:
     def __init__(
         self,
@@ -128,9 +168,13 @@ class _StubContainerClient:
         *,
         timeout: Optional[int] = None,
         **kwargs: object,
-    ):
+    ) -> _StubBlobPager:
         self.last_prefix = name_starts_with
-        return list(self._blobs)
+        page_size = kwargs.get("results_per_page")
+        return _StubBlobPager(
+            list(self._blobs),
+            page_size=page_size if isinstance(page_size, int) else None,
+        )
 
     def get_blob_client(
         self,
@@ -213,7 +257,7 @@ def test_list_blob_images_builds_payloads() -> None:
     ]
     container = _StubContainerClient(blobs=blobs)
 
-    items, latest_modified = function_app._list_blob_images(
+    items, latest_modified, next_continuation = function_app._list_blob_images(
         container,
         "processed",
         category="processed",
@@ -225,6 +269,48 @@ def test_list_blob_images_builds_payloads() -> None:
     assert items[1]["last_modified"] is None
     assert str(items[0]["url"]).startswith("/api/gallery/image?")
     assert latest_modified == last_modified
+    assert next_continuation is None
+
+
+def test_list_blob_images_paginates() -> None:
+    base_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    blobs = [
+        _StubBlob(f"processed/{idx}.jpg", size=10, last_modified=base_time)
+        for idx in range(5)
+    ]
+    container = _StubContainerClient(blobs=blobs)
+
+    first, _, first_token = function_app._list_blob_images(
+        container,
+        "processed",
+        category="processed",
+        use_public_urls=False,
+        page_size=2,
+    )
+    assert [item["name"] for item in first] == ["processed/0.jpg", "processed/1.jpg"]
+    assert first_token == "2"
+
+    second, _, second_token = function_app._list_blob_images(
+        container,
+        "processed",
+        category="processed",
+        use_public_urls=False,
+        page_size=2,
+        continuation_token=first_token,
+    )
+    assert [item["name"] for item in second] == ["processed/2.jpg", "processed/3.jpg"]
+    assert second_token == "4"
+
+    last, _, last_token = function_app._list_blob_images(
+        container,
+        "processed",
+        category="processed",
+        use_public_urls=False,
+        page_size=2,
+        continuation_token=second_token,
+    )
+    assert [item["name"] for item in last] == ["processed/4.jpg"]
+    assert last_token is None
 
 
 def test_list_blob_images_filters_by_since() -> None:
@@ -240,7 +326,7 @@ def test_list_blob_images_filters_by_since() -> None:
     container = _StubContainerClient(blobs=blobs)
     since = base_time + timedelta(minutes=1)
 
-    items, latest_modified = function_app._list_blob_images(
+    items, latest_modified, _ = function_app._list_blob_images(
         container,
         "processed",
         category="processed",
@@ -286,10 +372,37 @@ def test_gallery_images_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None
     assert payload["blobs"][0]["url"].startswith("/api/gallery/image?")
     assert "code=" not in payload["blobs"][0]["url"]
     assert payload["next_since"] == function_app._format_rfc3339(last_modified)
+    assert payload["next_continuation"] is None
+
+
+def test_gallery_images_paginates(monkeypatch: pytest.MonkeyPatch) -> None:
+    last_modified = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    blobs = [
+        _StubBlob(f"processed/{idx}.jpg", size=5, last_modified=last_modified)
+        for idx in range(3)
+    ]
+    container = _StubContainerClient(blobs=blobs)
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+    monkeypatch.setattr(function_app, "GALLERY_USE_PUBLIC_URLS", False)
+    req = _StubRequest(params={"category": "processed", "page_size": "2"})
+
+    resp = function_app.gallery_images(req)
+    payload = json.loads(resp.get_body().decode("utf-8"))
+
+    assert len(payload["blobs"]) == 2
+    assert payload["next_continuation"] == "2"
 
 
 def test_gallery_images_invalid_since_returns_400() -> None:
     req = _StubRequest(params={"category": "processed", "since": "not-a-date"})
+    resp = function_app.gallery_images(req)
+    assert resp.status_code == 400
+
+
+def test_gallery_images_invalid_page_size_returns_400() -> None:
+    req = _StubRequest(params={"category": "processed", "page_size": "0"})
     resp = function_app.gallery_images(req)
     assert resp.status_code == 400
 
@@ -407,11 +520,35 @@ def test_ready_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         function_app, "_get_container_client", lambda _: (None, container)
     )
+    monkeypatch.setattr(
+        function_app,
+        "get_model",
+        lambda *_args, **_kwargs: SimpleNamespace(model_id="stub/model", device="cpu"),
+    )
     resp = function_app.ready(_StubRequest())
     payload = json.loads(resp.get_body().decode("utf-8"))
     assert resp.status_code == 200
     assert payload["ready"] is True
     assert payload["components"]["storage"]["ok"] is True
+    assert payload["components"]["models"]["ok"] is True
+    assert payload["components"]["models"]["model_id"] == "stub/model"
+
+
+def test_ready_reports_model_load_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    container = _StubContainerClient()
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr(function_app, "get_model", _boom)
+    resp = function_app.ready(_StubRequest())
+    payload = json.loads(resp.get_body().decode("utf-8"))
+    assert resp.status_code == 503
+    assert payload["ready"] is False
+    assert payload["components"]["models"]["ok"] is False
 
 
 def test_analyze_layout_missing_body_returns_400() -> None:
@@ -420,8 +557,8 @@ def test_analyze_layout_missing_body_returns_400() -> None:
 
 
 def test_analyze_layout_serializes_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    element = LayoutElement(
-        label="Text",
+    element = DetectedCard(
+        label="Card",
         confidence=0.9,
         bbox_xyxy=(0, 0, 10, 10),
         bbox_norm=(0.0, 0.0, 0.1, 0.2),
@@ -429,7 +566,7 @@ def test_analyze_layout_serializes_response(monkeypatch: pytest.MonkeyPatch) -> 
         crop_mime="image/png",
         reading_order_hint=0,
     )
-    result = LayoutAnalysisResult(
+    result = DetectionResult(
         image_width=100,
         image_height=50,
         elements=[element],
@@ -438,7 +575,7 @@ def test_analyze_layout_serializes_response(monkeypatch: pytest.MonkeyPatch) -> 
     )
     monkeypatch.setattr(
         function_app,
-        "analyze_layout_from_image_bytes",
+        "detect_cards_from_image_bytes",
         lambda *_, **__: result,
     )
 
@@ -447,14 +584,14 @@ def test_analyze_layout_serializes_response(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert resp.status_code == 200
     assert payload["image_width"] == 100
-    assert payload["elements"][0]["label"] == "Text"
+    assert payload["elements"][0]["label"] == "Card"
     assert payload["elements"][0]["crop"]["data"] == base64.b64encode(b"crop").decode(
         "utf-8"
     )
 
 
 def test_analyze_layout_sets_207_on_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    result = LayoutAnalysisResult(
+    result = DetectionResult(
         image_width=0,
         image_height=0,
         elements=[],
@@ -463,7 +600,7 @@ def test_analyze_layout_sets_207_on_errors(monkeypatch: pytest.MonkeyPatch) -> N
     )
     monkeypatch.setattr(
         function_app,
-        "analyze_layout_from_image_bytes",
+        "detect_cards_from_image_bytes",
         lambda *_, **__: result,
     )
 

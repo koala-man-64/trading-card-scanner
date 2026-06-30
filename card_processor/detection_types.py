@@ -1,4 +1,4 @@
-"""Data structures for document layout analysis."""
+"""Data structures for card detection."""
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ class RawDetection:
 
 
 @dataclass
-class LayoutElement:
-    """A single detected layout region."""
+class DetectedCard:
+    """A single detected card region."""
 
     label: str
     confidence: float
@@ -33,11 +33,11 @@ class LayoutElement:
 
 
 @dataclass
-class LayoutAnalysisResult:
-    """Structured result for layout analysis."""
+class DetectionResult:
+    """Structured result for a card detection pass."""
 
     image_width: int
     image_height: int
-    elements: List[LayoutElement] = field(default_factory=list)
+    elements: List[DetectedCard] = field(default_factory=list)
     model_info: Dict[str, object] = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)

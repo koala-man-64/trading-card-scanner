@@ -1,4 +1,4 @@
-"""Crop extraction helpers for layout elements."""
+"""Crop extraction helpers for detected cards."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Tuple
 
 from PIL import Image
 
-from .layout_types import LayoutElement
+from .detection_types import DetectedCard
 
 
 def crop_region(img: Image.Image, bbox_xyxy: Tuple[int, int, int, int]) -> Image.Image:
@@ -29,15 +29,13 @@ def encode_image_bytes(
 
 
 def attach_crops(
-    elements: List[LayoutElement],
+    cards: List[DetectedCard],
     img: Image.Image,
     *,
     crop_format: str = "png",
-) -> List[LayoutElement]:
-    """Attach encoded crop bytes to each element."""
-    for element in elements:
-        crop = crop_region(img, element.bbox_xyxy)
-        element.crop_bytes, element.crop_mime = encode_image_bytes(
-            crop, format=crop_format
-        )
-    return elements
+) -> List[DetectedCard]:
+    """Attach encoded crop bytes to each detected card."""
+    for card in cards:
+        crop = crop_region(img, card.bbox_xyxy)
+        card.crop_bytes, card.crop_mime = encode_image_bytes(crop, format=crop_format)
+    return cards
