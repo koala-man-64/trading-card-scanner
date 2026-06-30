@@ -8,9 +8,9 @@ Pillow
 huggingface-hub
 torch
 transformers
+# timm provides the ResNet-50 backbone for the DETR detector (use_timm_backbone=True);
+# it is a runtime dependency even though nothing imports it directly.
 timm
-# TODO: Remove ultralytics once DETR rollout is stable.
-ultralytics
 
 # Dev/test dependencies
 pytest

@@ -23,12 +23,16 @@ from azure.storage.blob import (
 
 from card_processor.api_responses import error_response, json_response
 from card_processor import process_utils
-from card_processor.layout_analysis import analyze_layout_from_image_bytes
-from card_processor.layout_model import ModelResolutionError, resolve_model_id
+from card_processor.detection import detect_cards_from_image_bytes
+from card_processor.detection_model import (
+    ModelResolutionError,
+    get_model,
+    resolve_model_id,
+)
 from card_processor.request_validation import (
     RequestValidationError,
     normalize_image_format,
-    parse_layout_params,
+    parse_detection_params,
     parse_process_params,
     parse_since_param,
     read_bounded_blob,
@@ -212,6 +216,27 @@ def _normalize_prefix(prefix: str) -> str:
     return f"{cleaned}/" if cleaned else ""
 
 
+def _parse_page_size_param(value: Optional[str]) -> Optional[int]:
+    """Parse an optional gallery page size. No upper bound is enforced."""
+    if value is None or not value.strip():
+        return None
+    try:
+        page_size = int(value)
+    except ValueError as exc:
+        raise RequestValidationError(
+            "page_size must be an integer.",
+            status_code=400,
+            code="invalid_page_size",
+        ) from exc
+    if page_size < 1:
+        raise RequestValidationError(
+            "page_size must be greater than 0.",
+            status_code=400,
+            code="invalid_page_size",
+        )
+    return page_size
+
+
 @lru_cache(maxsize=1)
 def _load_gallery_template() -> Optional[str]:
     try:
@@ -283,14 +308,35 @@ def _list_blob_images(
     category: str,
     use_public_urls: bool,
     since: Optional[datetime] = None,
-) -> Tuple[List[Dict[str, object]], Optional[datetime]]:
+    page_size: Optional[int] = None,
+    continuation_token: Optional[str] = None,
+) -> Tuple[List[Dict[str, object]], Optional[datetime], Optional[str]]:
+    """List gallery blobs.
+
+    When ``page_size`` is given, a single page is returned along with a
+    continuation token for the next page (``None`` when the listing is
+    exhausted). When it is ``None`` the full listing is returned in one call.
+    """
     blobs = []
     normalized_prefix = _normalize_prefix(prefix)
     latest_modified: Optional[datetime] = None
-    blobs_iter = cast(
-        Iterable[_BlobListItem],
-        container_client.list_blobs(name_starts_with=normalized_prefix),
-    )
+    next_continuation: Optional[str] = None
+
+    if page_size is not None:
+        pager = cast(
+            Any,
+            container_client.list_blobs(
+                name_starts_with=normalized_prefix, results_per_page=page_size
+            ),
+        ).by_page(continuation_token=continuation_token)
+        page = next(pager, None)
+        blobs_iter = iter(page) if page is not None else iter(())
+    else:
+        blobs_iter = cast(
+            Iterable[_BlobListItem],
+            container_client.list_blobs(name_starts_with=normalized_prefix),
+        )
+
     for blob in blobs_iter:
         blob_modified = getattr(blob, "last_modified", None)
         blob_modified_utc = (
@@ -318,7 +364,10 @@ def _list_blob_images(
                 ),
             }
         )
-    return blobs, latest_modified
+
+    if page_size is not None:
+        next_continuation = getattr(pager, "continuation_token", None)
+    return blobs, latest_modified, next_continuation
 
 
 def _is_not_modified(
@@ -498,16 +547,18 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
             status_code=400,
         )
 
+    correlation_id = correlation_id_from_request(req)
     try:
         since = parse_since_param(req.params.get("since"))
+        page_size = _parse_page_size_param(req.params.get("page_size"))
     except RequestValidationError as exc:
-        correlation_id = correlation_id_from_request(req)
         return error_response(
             str(exc),
             status_code=exc.status_code,
             code=exc.code,
             correlation_id=correlation_id,
         )
+    continuation_token = (req.params.get("continuation") or "").strip() or None
 
     _, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
     if not container_client:
@@ -517,12 +568,14 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
 
     gallery_container = cast(_GalleryContainerClient, container_client)
     try:
-        blobs, latest_modified = _list_blob_images(
+        blobs, latest_modified, next_continuation = _list_blob_images(
             gallery_container,
             prefix,
             category=category,
             use_public_urls=GALLERY_USE_PUBLIC_URLS,
             since=since,
+            page_size=page_size,
+            continuation_token=continuation_token,
         )
     except Exception as exc:
         logging.error("Failed to list blobs for gallery: %s", exc)
@@ -538,6 +591,7 @@ def gallery_images(req: func.HttpRequest) -> func.HttpResponse:
         "refreshed_at": _format_rfc3339(refreshed_at),
         "refresh_seconds": GALLERY_REFRESH_SECONDS,
         "next_since": _format_rfc3339(next_since),
+        "next_continuation": next_continuation,
     }
     return func.HttpResponse(
         body=json.dumps(payload), status_code=200, mimetype="application/json"
@@ -643,11 +697,23 @@ def ready(req: func.HttpRequest) -> func.HttpResponse:
         components["settings"] = {"ok": True}
 
     if settings is not None:
-        components["models"] = {
-            "ok": True,
-            "allowed_model_ids": sorted(settings.allowed_model_ids),
-            "model_aliases": settings.model_aliases,
-        }
+        allowed_model_ids = sorted(settings.allowed_model_ids)
+        try:
+            bundle = get_model(None, settings)
+            components["models"] = {
+                "ok": True,
+                "model_id": bundle.model_id,
+                "device": str(bundle.device),
+                "allowed_model_ids": allowed_model_ids,
+                "model_aliases": settings.model_aliases,
+            }
+        except Exception as exc:
+            ready_status = False
+            components["models"] = {
+                "ok": False,
+                "error": str(exc),
+                "allowed_model_ids": allowed_model_ids,
+            }
     else:
         ready_status = False
         components["models"] = {"ok": False, "errors": ["settings unavailable"]}
@@ -698,7 +764,7 @@ def _parse_bool_param(value: Optional[str], *, default: bool) -> bool:
 @app.function_name(name="AnalyzeLayout")
 @app.route(route="layout", methods=["POST"], auth_level=DEFAULT_AUTH_LEVEL)
 def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
-    """Run document layout analysis on uploaded image bytes."""
+    """Run card detection on uploaded image bytes."""
     correlation_id = correlation_id_from_request(req)
     settings = _settings()
     try:
@@ -706,7 +772,7 @@ def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
         if not image_bytes:
             raise RequestValidationError("Provide image bytes in the request body.")
         validate_image_bytes(image_bytes, settings)
-        params = parse_layout_params(req.params)
+        params = parse_detection_params(req.params)
         resolve_model_id(params.model_variant, settings)
     except RequestValidationError as exc:
         log_event(
@@ -738,7 +804,7 @@ def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
             correlation_id=correlation_id,
         )
 
-    result = analyze_layout_from_image_bytes(
+    result = detect_cards_from_image_bytes(
         image_bytes,
         model_variant=params.model_variant,
         imgsz=params.imgsz,

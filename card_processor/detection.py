@@ -1,4 +1,4 @@
-"""Document layout analysis pipeline using a DETR-based card detector."""
+"""Card detection pipeline using a DETR-based detector."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ import logging
 from typing import Dict, Optional
 
 from .image_io import load_rgb_image
-from .layout_crops import attach_crops
-from .layout_infer import infer_layout
-from .layout_model import get_model
+from .detection_crops import attach_crops
+from .detection_infer import infer_detections
+from .detection_model import get_model
 from .settings import ScannerSettings
-from .layout_post import assign_reading_order, to_layout_elements
-from .layout_types import LayoutAnalysisResult
+from .detection_post import to_detected_cards
+from .detection_types import DetectionResult
 
 logger = logging.getLogger(__name__)
 
@@ -37,23 +37,23 @@ def _build_class_map(model) -> Dict[str, str]:
     return {"0": "Card"}
 
 
-def analyze_layout_from_image_bytes(
+def detect_cards_from_image_bytes(
     image_bytes: bytes,
     *,
     model_variant: Optional[str] = None,
-    imgsz: int = 1280,
+    imgsz: Optional[int] = None,
     conf: float = 0.25,
     iou: float = 0.5,
     extract_crops: bool = True,
     crop_format: str = "png",
     settings: Optional[ScannerSettings] = None,
-) -> LayoutAnalysisResult:
-    """Analyze document layout from raw image bytes."""
+) -> DetectionResult:
+    """Detect trading cards in raw image bytes."""
     errors = []
     try:
         img = load_rgb_image(image_bytes)
     except Exception as exc:
-        return LayoutAnalysisResult(
+        return DetectionResult(
             image_width=0,
             image_height=0,
             elements=[],
@@ -67,7 +67,7 @@ def analyze_layout_from_image_bytes(
         bundle = get_model(model_variant, settings=settings)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Failed to load model %s", model_variant)
-        return LayoutAnalysisResult(
+        return DetectionResult(
             image_width=width,
             image_height=height,
             elements=[],
@@ -76,21 +76,22 @@ def analyze_layout_from_image_bytes(
         )
 
     class_map = _build_class_map(bundle.model)
-    raw_dets = infer_layout(bundle.model, bundle.processor, img, conf=conf)
-    elements = to_layout_elements(raw_dets, width, height, class_map)
-    assign_reading_order(elements)
+    raw_dets = infer_detections(
+        bundle.model, bundle.processor, img, conf=conf, imgsz=imgsz, iou=iou
+    )
+    cards = to_detected_cards(raw_dets, width, height, class_map)
 
-    if extract_crops and elements:
+    if extract_crops and cards:
         try:
-            attach_crops(elements, img, crop_format=crop_format)
+            attach_crops(cards, img, crop_format=crop_format)
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Failed to attach crops")
             errors.append(f"crop_error: {exc}")
 
-    return LayoutAnalysisResult(
+    return DetectionResult(
         image_width=width,
         image_height=height,
-        elements=elements,
+        elements=cards,
         model_info={
             "model_id": bundle.model_id,
             "model_variant": model_variant,

@@ -1,17 +1,10 @@
 import logging
-import re
 from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
-from PIL import Image
 
-from .layout_analysis import analyze_layout_from_image_bytes
-
-try:
-    import pytesseract
-except ImportError:
-    pytesseract = None  # type: ignore
+from .detection import detect_cards_from_image_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +83,7 @@ def _encode_bgr_image(image: np.ndarray) -> bytes:
 
 
 def _card_elements_from_bytes(image_bytes: bytes):
-    result = analyze_layout_from_image_bytes(image_bytes, extract_crops=False)
+    result = detect_cards_from_image_bytes(image_bytes, extract_crops=False)
     if result.errors:
         logger.warning("Card detection errors: %s", result.errors)
     return [el for el in result.elements if _is_card_label(el.label)]
@@ -118,35 +111,6 @@ def detect_cards(image: np.ndarray) -> List[BoundingBox]:
     return detect_card_boxes(image)
 
 
-def extract_card_name_from_crop(crop: np.ndarray) -> str:
-    """Extract a card name from a cropped card image using OCR."""
-    if pytesseract is None:
-        return "unknown"
-
-    rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb)
-    img_width, img_height = pil_img.size
-
-    label_height = int(img_height * 0.25)
-    label_region = pil_img.crop((0, 0, img_width, label_height))
-
-    gray = label_region.convert("L")
-    thresholded = gray.point(lambda p: 255 if p > 180 else 0)
-    text = pytesseract.image_to_string(thresholded, lang="eng")
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return "unknown"
-
-    name = re.sub(r"[^A-Za-z0-9 '\-]", "", lines[0])
-    return name if len(name) >= 2 else "unknown"
-
-
-def extract_card_name(crop: np.ndarray) -> str:
-    """Backward-compatible wrapper for `extract_card_name_from_crop`."""
-    return extract_card_name_from_crop(crop)
-
-
 def count_cards_in_image_bytes(image_bytes: bytes) -> int:
     """Analyze image bytes and return the number of detected cards."""
     elements = _card_elements_from_bytes(image_bytes)
@@ -162,7 +126,7 @@ def extract_card_crops_from_image_bytes(
     attempting OCR-based name extraction.
     """
     results: List[Tuple[str, bytes]] = []
-    analysis = analyze_layout_from_image_bytes(
+    analysis = detect_cards_from_image_bytes(
         image_bytes, extract_crops=True, crop_format="jpeg"
     )
     if analysis.errors:
