@@ -3,8 +3,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
+from PIL import Image
 
 from card_processor import process_utils
+from card_processor.detection_types import DetectionResult, DetectedCard
 
 
 SAMPLES = Path(__file__).parent / "samples"
@@ -32,6 +34,13 @@ def _read_input_sample(name: str) -> bytes:
     if not path.exists():
         pytest.skip(f"Sample file missing: {path}")
     return path.read_bytes()
+
+
+def _jpeg_bytes(width: int = 40, height: int = 60) -> bytes:
+    image = Image.new("RGB", (width, height), color="white")
+    ok, buf = cv2.imencode(".jpg", cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR))
+    assert ok
+    return buf.tobytes()
 
 
 @pytest.mark.parametrize("sample_name", CORE_INPUT_IMAGES)
@@ -73,3 +82,67 @@ def test_extract_card_crops_handles_input_samples(sample_name: str):
     for name, img_bytes in crops:
         assert isinstance(name, str)
         assert isinstance(img_bytes, (bytes, bytearray))
+
+
+def test_extract_card_crops_filters_implausible_and_duplicate_elements(monkeypatch):
+    crop = _jpeg_bytes()
+    result = DetectionResult(
+        image_width=200,
+        image_height=200,
+        elements=[
+            DetectedCard(
+                label="Card",
+                confidence=0.95,
+                bbox_xyxy=(20, 20, 80, 110),
+                bbox_norm=(0, 0, 0, 0),
+                crop_bytes=crop,
+                crop_mime="image/jpeg",
+            ),
+            DetectedCard(
+                label="Card",
+                confidence=0.50,
+                bbox_xyxy=(22, 22, 82, 112),
+                bbox_norm=(0, 0, 0, 0),
+                crop_bytes=crop,
+                crop_mime="image/jpeg",
+            ),
+            DetectedCard(
+                label="Card",
+                confidence=0.99,
+                bbox_xyxy=(0, 0, 200, 20),
+                bbox_norm=(0, 0, 0, 0),
+                crop_bytes=crop,
+                crop_mime="image/jpeg",
+            ),
+        ],
+        model_info={},
+        errors=[],
+    )
+    monkeypatch.setattr(
+        process_utils,
+        "detect_cards_from_image_bytes",
+        lambda *_, **__: result,
+    )
+
+    crops = process_utils.extract_card_crops_from_image_bytes(b"image")
+
+    assert crops == [("card_1", crop)]
+
+
+def test_identify_card_from_crop_matches_ocr_to_catalog(monkeypatch):
+    class FakeTesseract:
+        @staticmethod
+        def image_to_string(*args, **kwargs):
+            return "Pikchu\n"
+
+    monkeypatch.setattr(process_utils, "pytesseract", FakeTesseract)
+    crop = np.full((80, 60, 3), 255, dtype=np.uint8)
+
+    identification = process_utils.identify_card_from_crop(
+        crop,
+        catalog_names=["Pikachu", "Charizard"],
+    )
+
+    assert identification.name == "Pikachu"
+    assert identification.source == "catalog"
+    assert identification.match_score >= process_utils.CARD_NAME_MATCH_THRESHOLD

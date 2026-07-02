@@ -83,6 +83,13 @@ The intended Azure posture is Microsoft Entra EasyAuth at the Function App bound
 
 - Set `STORAGE_AUTH_MODE=managed_identity`.
 - Set `STORAGE_ACCOUNT_URL=https://<account>.blob.core.windows.net`.
+- For capture-ingest uploads from `trading-card-uploader`, set
+  `INPUT_CONTAINER_NAME=card-uploads`, `INPUT_BLOB_PREFIX=raw`, and
+  `INPUT_STORAGE_CONNECTION_NAME=<connection-prefix>` so the blob trigger watches
+  uploaded images and not uploader idempotency manifests.
+- For the input trigger connection, configure
+  `<connection-prefix>__blobServiceUri` and
+  `<connection-prefix>__queueServiceUri` for the uploader storage account.
 - Assign the Function App managed identity least-privilege Blob Storage roles for app data.
 - Keep connection-string mode for local Azurite and emergency rollback only.
 - Do not put Function keys in browser URLs; Postman/Azure clients should use authenticated Entra sessions or bearer tokens.

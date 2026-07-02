@@ -24,6 +24,8 @@ variables:
     value: fa-trading-card-scanner-npe
   - name: FUNCTION_APP_TYPE
     value: functionAppLinux
+  - name: BLOB_CREATED_EVENT_SUBSCRIPTION_NAME
+    value: tcs-processblob-created
   - name: PYTHON_VERSION
     value: "3.10"
 
@@ -107,6 +109,7 @@ stages:
                       if [ -z "${base_url}" ] || [ "${base_url}" = '$(FUNCTION_APP_BASE_URL)' ]; then
                         base_url="https://${default_host}"
                       fi
+                      base_url="${base_url%/}"
                       source_sha="$(python - <<'PY' "${manifest}"
                       import json
                       import sys
@@ -144,6 +147,97 @@ stages:
                         smoke_args+=(--function-key "${function_key}")
                       fi
                       python scripts/azure_devops/smoke_function_app.py "${smoke_args[@]}"
+
+                      storage_connection="$(az functionapp config appsettings list \
+                        --name "$(FUNCTION_APP_NAME)" \
+                        --resource-group "${FUNCTION_APP_RESOURCE_GROUP}" \
+                        --query "[?name=='AzureWebJobsStorage'].value | [0]" -o tsv)"
+                      storage_account_url="$(az functionapp config appsettings list \
+                        --name "$(FUNCTION_APP_NAME)" \
+                        --resource-group "${FUNCTION_APP_RESOURCE_GROUP}" \
+                        --query "[?name=='STORAGE_ACCOUNT_URL'].value | [0]" -o tsv)"
+                      export TCS_STORAGE_CONNECTION="${storage_connection:-}"
+                      export TCS_STORAGE_ACCOUNT_URL="${storage_account_url:-}"
+                      storage_account_name="$(python - <<'PY'
+                      import os
+                      import re
+                      from urllib.parse import urlparse
+
+                      connection = os.environ.get("TCS_STORAGE_CONNECTION", "")
+                      match = re.search(r"(?:^|;)AccountName=([^;]+)", connection)
+                      if match:
+                          print(match.group(1))
+                          raise SystemExit(0)
+
+                      account_url = os.environ.get("TCS_STORAGE_ACCOUNT_URL", "")
+                      parsed = urlparse(account_url)
+                      host = parsed.netloc or parsed.path
+                      if host.endswith(".blob.core.windows.net"):
+                          print(host.split(".", 1)[0])
+                          raise SystemExit(0)
+
+                      raise SystemExit(
+                          "Could not resolve storage account name from "
+                          "AzureWebJobsStorage or STORAGE_ACCOUNT_URL"
+                      )
+                      PY
+                      )"
+                      unset TCS_STORAGE_CONNECTION TCS_STORAGE_ACCOUNT_URL
+
+                      input_container="$(az functionapp config appsettings list \
+                        --name "$(FUNCTION_APP_NAME)" \
+                        --resource-group "${FUNCTION_APP_RESOURCE_GROUP}" \
+                        --query "[?name=='INPUT_CONTAINER_NAME'].value | [0]" -o tsv)"
+                      input_container="${input_container:-input}"
+                      input_prefix="$(az functionapp config appsettings list \
+                        --name "$(FUNCTION_APP_NAME)" \
+                        --resource-group "${FUNCTION_APP_RESOURCE_GROUP}" \
+                        --query "[?name=='INPUT_BLOB_PREFIX'].value | [0]" -o tsv)"
+                      input_prefix="${input_prefix:-raw}"
+                      input_prefix="${input_prefix#/}"
+                      input_prefix="${input_prefix%/}"
+                      subject_prefix="/blobServices/default/containers/${input_container}/blobs/"
+                      if [ -n "${input_prefix}" ]; then
+                        subject_prefix="${subject_prefix}${input_prefix}/"
+                      fi
+
+                      storage_account_id="$(az storage account show \
+                        --name "${storage_account_name}" \
+                        --query id -o tsv)"
+                      if [ -z "${storage_account_id}" ]; then
+                        echo "Could not resolve storage account resource id for ${storage_account_name}." >&2
+                        exit 1
+                      fi
+
+                      blobs_extension_key="$(az functionapp keys list \
+                        --name "$(FUNCTION_APP_NAME)" \
+                        --resource-group "${FUNCTION_APP_RESOURCE_GROUP}" \
+                        --query "systemKeys.blobs_extension" -o tsv)"
+                      if [ -z "${blobs_extension_key}" ]; then
+                        echo "Could not resolve blobs_extension system key for Event Grid delivery." >&2
+                        exit 1
+                      fi
+                      event_endpoint="${base_url}/runtime/webhooks/blobs?functionName=Host.Functions.ProcessBlob&code=${blobs_extension_key}"
+
+                      az eventgrid event-subscription delete \
+                        --name "$(BLOB_CREATED_EVENT_SUBSCRIPTION_NAME)" \
+                        --source-resource-id "${storage_account_id}" \
+                        --yes >/dev/null 2>&1 || true
+                      az eventgrid event-subscription create \
+                        --name "$(BLOB_CREATED_EVENT_SUBSCRIPTION_NAME)" \
+                        --source-resource-id "${storage_account_id}" \
+                        --endpoint "${event_endpoint}" \
+                        --included-event-types Microsoft.Storage.BlobCreated \
+                        --subject-begins-with "${subject_prefix}" \
+                        --subject-case-sensitive false \
+                        --max-delivery-attempts 10 \
+                        --event-ttl 60 \
+                        -o none
+                      az eventgrid event-subscription show \
+                        --name "$(BLOB_CREATED_EVENT_SUBSCRIPTION_NAME)" \
+                        --source-resource-id "${storage_account_id}" \
+                        --query "{name:name,provisioningState:provisioningState,filter:filter,endpointType:destination.endpointType}" \
+                        -o json > artifacts/deploy/blob-event-subscription.json
 
                       python - <<'PY' "${manifest}"
                       import json

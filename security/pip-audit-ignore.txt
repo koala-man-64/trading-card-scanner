@@ -10,3 +10,7 @@ PYSEC-2025-216
 
 # Fixed only by transformers 5.0.0rc3; hold on stable 4.x until a stable 5.x cut is available.
 GHSA-69w3-r845-3855
+
+# Fixed only in transformers 5.3.0 (outside the pinned <5 range); hold on stable 4.x
+# until a transformers 5.x upgrade is scoped and validated against the DETR pipeline.
+GHSA-29pf-2h5f-8g72

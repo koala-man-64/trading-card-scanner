@@ -1,6 +1,7 @@
+import json
 import logging
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 import pytest
 
@@ -22,8 +23,16 @@ class _StubContainer:
     def __init__(self) -> None:
         self.uploads: List[Tuple[str, bytes, bool]] = []
 
-    def upload_blob(self, name, data, overwrite):
+    def upload_blob(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        overwrite: bool,
+        **kwargs: Any,
+    ) -> object:
         self.uploads.append((name, data, overwrite))
+        return object()
 
 
 def test_save_processed_cards_to_folder_writes_files(tmp_path: Path) -> None:
@@ -85,7 +94,14 @@ def test_process_blob_bytes_uploads_processed_cards(
         container,
     )  # type: ignore
 
-    assert container.uploads == [("sample_input_1_1.jpg", sample_bytes, True)]
+    processed_upload = container.uploads[0]
+    lineage_upload = container.uploads[1]
+    lineage = json.loads(lineage_upload[1].decode("utf-8"))
+
+    assert processed_upload == ("sample_input_1_1.jpg", sample_bytes, True)
+    assert lineage_upload[0] == function_app._lineage_blob_name(source_path)
+    assert lineage["sourceBlobName"] == source_path
+    assert lineage["outputsByCategory"]["processed"] == ["sample_input_1_1.jpg"]
     assert result.uploaded_count == 1
 
 

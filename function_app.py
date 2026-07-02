@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -15,20 +16,12 @@ from urllib.parse import urlencode
 import azure.functions as func
 from azure.core.exceptions import ResourceNotFoundError
 from azure.core.paging import ItemPaged
-from azure.storage.blob import (
-    BlobClient,
-    BlobServiceClient,
-    ContainerClient,
-)
+from azure.storage.blob import BlobServiceClient, ContainerClient
 
 from card_processor.api_responses import error_response, json_response
 from card_processor import process_utils
 from card_processor.detection import detect_cards_from_image_bytes
-from card_processor.detection_model import (
-    ModelResolutionError,
-    get_model,
-    resolve_model_id,
-)
+from card_processor.detection_model import ModelResolutionError, resolve_model_id
 from card_processor.request_validation import (
     RequestValidationError,
     normalize_image_format,
@@ -52,9 +45,14 @@ except ImportError:
 app = func.FunctionApp()
 logger = logging.getLogger(__name__)
 
-# Define container names from environment variables with defaults
+# Define container names and storage binding names from environment variables with defaults.
 PROCESSED_CONTAINER_NAME = os.environ.get("PROCESSED_CONTAINER_NAME", "processed")
 INPUT_CONTAINER_NAME = os.environ.get("INPUT_CONTAINER_NAME", "input")
+INPUT_BLOB_PREFIX = os.environ.get("INPUT_BLOB_PREFIX", "raw").strip().strip("/")
+INPUT_STORAGE_CONNECTION_NAME = os.environ.get(
+    "INPUT_STORAGE_CONNECTION_NAME", "AzureWebJobsStorage"
+)
+INPUT_BLOB_SOURCE = func.BlobSource.EVENT_GRID
 GALLERY_CONTAINER_NAME = os.environ.get(
     "GALLERY_CONTAINER_NAME", PROCESSED_CONTAINER_NAME
 )
@@ -71,10 +69,37 @@ STORAGE_AUTH_MODE = (
     os.environ.get("STORAGE_AUTH_MODE", "connection_string").strip().lower()
 )
 STORAGE_ACCOUNT_URL = os.environ.get("STORAGE_ACCOUNT_URL")
+ADMIN_GALLERY_MANAGE_SCOPE = os.environ.get(
+    "ADMIN_GALLERY_MANAGE_SCOPE", "gallery.manage"
+).strip()
+ADMIN_ALLOWED_OBJECT_IDS = {
+    value.strip()
+    for value in os.environ.get("ADMIN_ALLOWED_OBJECT_IDS", "").split(",")
+    if value.strip()
+}
+ADMIN_ALLOWED_ROLES = {
+    value.strip()
+    for value in os.environ.get("ADMIN_ALLOWED_ROLES", "Gallery.Admin").split(",")
+    if value.strip()
+}
+LINEAGE_PREFIX = os.environ.get("GALLERY_LINEAGE_PREFIX", "lineage").strip("/")
+GALLERY_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif")
 
 
 class _BlobClientUrl(Protocol):
     url: str
+
+
+class _BlobDownload(Protocol):
+    def readall(self) -> bytes: ...
+
+
+class _GalleryBlobClient(_BlobClientUrl, Protocol):
+    def download_blob(self) -> _BlobDownload: ...
+
+    def delete_blob(self) -> None: ...
+
+    def get_blob_properties(self) -> Any: ...
 
 
 class _BlobListItem(Protocol):
@@ -90,7 +115,7 @@ class _GalleryContainerClient(Protocol):
         snapshot: Optional[str] = None,
         *,
         version_id: Optional[str] = None,
-    ) -> _BlobClientUrl | BlobClient: ...
+    ) -> _GalleryBlobClient: ...
 
     def list_blobs(
         self,
@@ -101,9 +126,25 @@ class _GalleryContainerClient(Protocol):
         **kwargs: Any,
     ) -> Iterable[_BlobListItem] | ItemPaged[Any]: ...
 
+    def upload_blob(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        overwrite: bool,
+        **kwargs: Any,
+    ) -> object: ...
+
 
 class _UploadContainerClient(Protocol):
-    def upload_blob(self, name: str, data: bytes, *, overwrite: bool) -> object: ...
+    def upload_blob(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        overwrite: bool,
+        **kwargs: Any,
+    ) -> object: ...
 
 
 def _resolve_auth_level(
@@ -216,25 +257,96 @@ def _normalize_prefix(prefix: str) -> str:
     return f"{cleaned}/" if cleaned else ""
 
 
-def _parse_page_size_param(value: Optional[str]) -> Optional[int]:
-    """Parse an optional gallery page size. No upper bound is enforced."""
-    if value is None or not value.strip():
-        return None
+def _json_error(message: str, status_code: int, code: str) -> func.HttpResponse:
+    return func.HttpResponse(
+        body=json.dumps({"error": code, "message": message}),
+        status_code=status_code,
+        mimetype="application/json",
+    )
+
+
+def _extract_easy_auth_claims(header: Optional[str]) -> dict[str, list[str]]:
+    if not header:
+        return {}
     try:
-        page_size = int(value)
-    except ValueError as exc:
-        raise RequestValidationError(
-            "page_size must be an integer.",
-            status_code=400,
-            code="invalid_page_size",
-        ) from exc
-    if page_size < 1:
-        raise RequestValidationError(
-            "page_size must be greater than 0.",
-            status_code=400,
-            code="invalid_page_size",
+        padded = header + "=" * (-len(header) % 4)
+        payload = json.loads(base64.b64decode(padded).decode("utf-8"))
+    except Exception:
+        logging.warning("Invalid x-ms-client-principal header")
+        return {}
+
+    claims: dict[str, list[str]] = {}
+    for item in payload.get("claims", []):
+        typ = str(item.get("typ", "")).strip()
+        val = str(item.get("val", "")).strip()
+        if typ and val:
+            claims.setdefault(typ, []).append(val)
+    return claims
+
+
+def _admin_claim_values(claims: dict[str, list[str]], key: str) -> set[str]:
+    return {
+        part for value in claims.get(key, []) for part in str(value).split() if part
+    }
+
+
+def _require_gallery_admin(
+    req: func.HttpRequest,
+) -> tuple[bool, func.HttpResponse | None]:
+    claims = _extract_easy_auth_claims(req.headers.get("x-ms-client-principal"))
+    if not claims:
+        return False, _json_error(
+            "Admin gallery requests require an authenticated Entra principal.",
+            401,
+            "missing_admin_principal",
         )
-    return page_size
+
+    scopes = _admin_claim_values(claims, "scp")
+    roles = _admin_claim_values(claims, "roles") | _admin_claim_values(
+        claims,
+        "http://schemas.microsoft.com/ws/2008/06/identity/claims/role",
+    )
+    object_ids = _admin_claim_values(claims, "oid") | _admin_claim_values(
+        claims,
+        "http://schemas.microsoft.com/identity/claims/objectidentifier",
+    )
+
+    if ADMIN_GALLERY_MANAGE_SCOPE not in scopes:
+        return False, _json_error(
+            f"Required scope is missing: {ADMIN_GALLERY_MANAGE_SCOPE}",
+            403,
+            "missing_scope",
+        )
+
+    if not ADMIN_ALLOWED_OBJECT_IDS and not ADMIN_ALLOWED_ROLES:
+        return False, _json_error(
+            "Admin gallery authorization is not configured.",
+            500,
+            "admin_authorization_not_configured",
+        )
+
+    if ADMIN_ALLOWED_OBJECT_IDS.intersection(
+        object_ids
+    ) or ADMIN_ALLOWED_ROLES.intersection(roles):
+        return True, None
+
+    return False, _json_error(
+        "The authenticated principal is not allowed to manage gallery images.",
+        403,
+        "admin_not_allowed",
+    )
+
+
+def _build_input_blob_trigger_path(container_name: str, prefix: str) -> str:
+    normalized_prefix = _normalize_prefix(prefix)
+    if normalized_prefix:
+        return f"{container_name}/{normalized_prefix}{{name}}"
+    return f"{container_name}/{{name}}"
+
+
+INPUT_BLOB_TRIGGER_PATH = _build_input_blob_trigger_path(
+    INPUT_CONTAINER_NAME, INPUT_BLOB_PREFIX
+)
 
 
 @lru_cache(maxsize=1)
@@ -268,6 +380,72 @@ def _format_http_datetime(value: datetime) -> str:
     return normalized.strftime("%a, %d %b %Y %H:%M:%S GMT")
 
 
+def _lineage_blob_name(source_name: str) -> str:
+    digest = hashlib.sha256(source_name.encode("utf-8")).hexdigest()
+    return f"{LINEAGE_PREFIX}/{digest}.json"
+
+
+def _is_gallery_image_blob(blob_name: str) -> bool:
+    lowered = blob_name.lower()
+    return lowered.endswith(GALLERY_IMAGE_EXTENSIONS)
+
+
+def _load_lineage_manifest(
+    container_client: _GalleryContainerClient,
+    source_name: str,
+) -> dict[str, object] | None:
+    blob_client = container_client.get_blob_client(_lineage_blob_name(source_name))
+    try:
+        data = blob_client.download_blob().readall()
+    except ResourceNotFoundError:
+        return None
+    return cast(dict[str, object], json.loads(data.decode("utf-8")))
+
+
+def _write_lineage_manifest(
+    container_client: _GalleryContainerClient,
+    source_name: str,
+    processed_blobs: list[str],
+) -> None:
+    manifest = {
+        "sourceBlobName": source_name,
+        "outputsByCategory": {
+            "processed": processed_blobs,
+            "segmented": [],
+        },
+        "updatedAtUtc": _format_rfc3339(datetime.now(timezone.utc)),
+    }
+    container_client.upload_blob(
+        name=_lineage_blob_name(source_name),
+        data=json.dumps(manifest, sort_keys=True).encode("utf-8"),
+        overwrite=True,
+    )
+
+
+def _lineage_source_index(
+    container_client: _GalleryContainerClient,
+) -> dict[str, str]:
+    index: dict[str, str] = {}
+    prefix = _normalize_prefix(LINEAGE_PREFIX)
+    for blob in container_client.list_blobs(name_starts_with=prefix):
+        try:
+            data = container_client.get_blob_client(blob.name).download_blob().readall()
+            manifest = json.loads(data.decode("utf-8"))
+        except Exception:
+            logging.warning("Skipping invalid lineage manifest %s", blob.name)
+            continue
+        source_name = str(manifest.get("sourceBlobName", "")).strip()
+        outputs = manifest.get("outputsByCategory", {})
+        if not source_name or not isinstance(outputs, dict):
+            continue
+        for names in outputs.values():
+            if isinstance(names, list):
+                for name in names:
+                    if isinstance(name, str):
+                        index[name] = source_name
+    return index
+
+
 def _parse_since_param(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -299,6 +477,27 @@ def _build_gallery_image_url(
 
     params = {"name": blob_name, "category": category}
     return f"/api/gallery/image?{urlencode(params)}"
+
+
+def _parse_page_size_param(value: Optional[str]) -> Optional[int]:
+    """Parse an optional gallery page size. No upper bound is enforced."""
+    if value is None or not value.strip():
+        return None
+    try:
+        page_size = int(value)
+    except ValueError as exc:
+        raise RequestValidationError(
+            "page_size must be an integer.",
+            status_code=400,
+            code="invalid_page_size",
+        ) from exc
+    if page_size < 1:
+        raise RequestValidationError(
+            "page_size must be greater than 0.",
+            status_code=400,
+            code="invalid_page_size",
+        )
+    return page_size
 
 
 def _list_blob_images(
@@ -338,6 +537,8 @@ def _list_blob_images(
         )
 
     for blob in blobs_iter:
+        if not _is_gallery_image_blob(blob.name):
+            continue
         blob_modified = getattr(blob, "last_modified", None)
         blob_modified_utc = (
             blob_modified.astimezone(timezone.utc) if blob_modified else None
@@ -475,6 +676,11 @@ def _process_blob_bytes(
         return UploadBatchResult()
 
     result = _upload_processed_cards(processed_container, source_name, cards)
+    _write_lineage_manifest(
+        cast(_GalleryContainerClient, processed_container),
+        source_name,
+        result.uploaded_blobs,
+    )
     if result.has_failures:
         raise RuntimeError(
             f"Failed to upload {result.failed_count} of {result.attempted} cards"
@@ -485,11 +691,12 @@ def _process_blob_bytes(
 @app.function_name(name="ProcessBlob")
 @app.blob_trigger(
     arg_name="inputBlob",
-    path=f"{INPUT_CONTAINER_NAME}/{{name}}",
-    connection="AzureWebJobsStorage",
+    path=INPUT_BLOB_TRIGGER_PATH,
+    connection=INPUT_STORAGE_CONNECTION_NAME,
+    source=INPUT_BLOB_SOURCE,
 )
 def process_blob(inputBlob: func.InputStream) -> None:
-    """Blob trigger to process trading card images uploaded to the input container."""
+    """Process raw trading card images uploaded by the capture app."""
     if not inputBlob.name:
         logging.error("Blob name is missing, cannot process.")
         return
@@ -533,6 +740,337 @@ def _gallery_prefix_for_category(category: str) -> Optional[str]:
     if normalized == "segmented":
         return GALLERY_SEGMENTED_PREFIX
     return None
+
+
+def _parse_positive_limit(value: Optional[str], default: int = 50) -> int:
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return max(1, min(parsed, 100))
+
+
+def _read_json_body(req: func.HttpRequest) -> dict[str, object]:
+    try:
+        payload = json.loads(req.get_body().decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RequestValidationError("Request body must be a JSON object.") from exc
+    if not isinstance(payload, dict):
+        raise RequestValidationError("Request body must be a JSON object.")
+    return cast(dict[str, object], payload)
+
+
+def _delete_blob_if_exists(
+    container_client: _GalleryContainerClient,
+    blob_name: str,
+) -> bool:
+    try:
+        container_client.get_blob_client(blob_name).delete_blob()
+        return True
+    except ResourceNotFoundError:
+        return False
+
+
+def _admin_gallery_items(
+    container_client: _GalleryContainerClient,
+    category: str,
+    limit: int,
+    cursor: Optional[str],
+) -> tuple[list[dict[str, object]], Optional[str]]:
+    prefix = _gallery_prefix_for_category(category)
+    if prefix is None:
+        raise RequestValidationError(
+            "Unsupported category. Use processed or segmented."
+        )
+    source_index = _lineage_source_index(container_client)
+    normalized_prefix = _normalize_prefix(prefix)
+    blobs = [
+        blob
+        for blob in container_client.list_blobs(name_starts_with=normalized_prefix)
+        if _is_gallery_image_blob(blob.name)
+    ]
+    start = int(cursor) if cursor and cursor.isdigit() else 0
+    page = blobs[start : start + limit]
+    next_cursor = str(start + limit) if start + limit < len(blobs) else None
+    items: list[dict[str, object]] = []
+    for blob in page:
+        modified = getattr(blob, "last_modified", None)
+        modified_utc = modified.astimezone(timezone.utc) if modified else None
+        items.append(
+            {
+                "category": category,
+                "name": blob.name,
+                "sourceBlobName": source_index.get(blob.name),
+                "size": blob.size or 0,
+                "lastModifiedUtc": _format_rfc3339(modified_utc)
+                if modified_utc
+                else None,
+                "previewUrl": (
+                    "/api/v1/admin/gallery/image?"
+                    + urlencode({"category": category, "name": blob.name})
+                ),
+                "canCascade": blob.name in source_index,
+            }
+        )
+    return items, next_cursor
+
+
+@app.function_name(name="AdminGalleryImages")
+@app.route(
+    route="v1/admin/gallery/images",
+    methods=["GET"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+def admin_gallery_images(req: func.HttpRequest) -> func.HttpResponse:
+    """Return admin gallery items for processed scanner outputs."""
+    authorized, response = _require_gallery_admin(req)
+    if not authorized:
+        return cast(func.HttpResponse, response)
+
+    category = (req.params.get("category") or "processed").strip().lower()
+    if category not in {"processed", "segmented"}:
+        return _json_error(
+            "Unsupported category. Use processed or segmented.", 400, "invalid_category"
+        )
+    limit = _parse_positive_limit(req.params.get("limit"))
+    cursor = req.params.get("cursor")
+    _, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
+    if not container_client:
+        return _json_error("Storage is not configured.", 500, "storage_not_configured")
+
+    try:
+        items, next_cursor = _admin_gallery_items(
+            cast(_GalleryContainerClient, container_client),
+            category,
+            limit,
+            cursor,
+        )
+    except RequestValidationError as exc:
+        return _json_error(str(exc), exc.status_code, exc.code)
+
+    return func.HttpResponse(
+        body=json.dumps(
+            {
+                "category": category,
+                "items": items,
+                "nextCursor": next_cursor,
+            }
+        ),
+        status_code=200,
+        mimetype="application/json",
+    )
+
+
+@app.function_name(name="AdminGalleryImage")
+@app.route(
+    route="v1/admin/gallery/image",
+    methods=["GET"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+def admin_gallery_image(req: func.HttpRequest) -> func.HttpResponse:
+    """Serve a processed scanner image to an authorized admin."""
+    authorized, response = _require_gallery_admin(req)
+    if not authorized:
+        return cast(func.HttpResponse, response)
+    category = (req.params.get("category") or "processed").strip().lower()
+    if category not in {"processed", "segmented"}:
+        return _json_error(
+            "Unsupported category. Use processed or segmented.",
+            400,
+            "invalid_category",
+        )
+    return gallery_image(req)
+
+
+@app.function_name(name="AdminGalleryDeleteBySource")
+@app.route(
+    route="v1/admin/gallery/actions/delete-by-source",
+    methods=["POST"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+def admin_gallery_delete_by_source(req: func.HttpRequest) -> func.HttpResponse:
+    """Delete processed scanner outputs recorded for a source blob."""
+    authorized, response = _require_gallery_admin(req)
+    if not authorized:
+        return cast(func.HttpResponse, response)
+
+    try:
+        payload = _read_json_body(req)
+    except RequestValidationError as exc:
+        return _json_error(str(exc), exc.status_code, exc.code)
+    source_name = str(payload.get("sourceBlobName", "")).strip()
+    if not source_name:
+        return _json_error(
+            "sourceBlobName is required.", 400, "missing_source_blob_name"
+        )
+
+    _, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
+    if not container_client:
+        return _json_error("Storage is not configured.", 500, "storage_not_configured")
+    gallery_container = cast(_GalleryContainerClient, container_client)
+    manifest = _load_lineage_manifest(gallery_container, source_name)
+    if manifest is None:
+        return _json_error(
+            "Lineage is missing for the requested source blob.",
+            409,
+            "lineage_missing",
+        )
+
+    outputs = manifest.get("outputsByCategory", {})
+    deleted: list[str] = []
+    missing: list[str] = []
+    if isinstance(outputs, dict):
+        for names in outputs.values():
+            if isinstance(names, list):
+                for name in names:
+                    if not isinstance(name, str):
+                        continue
+                    if _delete_blob_if_exists(gallery_container, name):
+                        deleted.append(name)
+                    else:
+                        missing.append(name)
+    _delete_blob_if_exists(gallery_container, _lineage_blob_name(source_name))
+    log_event(
+        logger,
+        logging.INFO,
+        "admin_gallery_source_deleted",
+        source_blob_name=source_name,
+        deleted_count=len(deleted),
+        missing_count=len(missing),
+    )
+    return func.HttpResponse(
+        body=json.dumps(
+            {
+                "sourceBlobName": source_name,
+                "deleted": deleted,
+                "missing": missing,
+                "lineageDeleted": True,
+            }
+        ),
+        status_code=200,
+        mimetype="application/json",
+    )
+
+
+@app.function_name(name="AdminGalleryDeleteImage")
+@app.route(
+    route="v1/admin/gallery/actions/delete-image",
+    methods=["POST"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+def admin_gallery_delete_image(req: func.HttpRequest) -> func.HttpResponse:
+    """Delete one processed scanner output by explicit blob name."""
+    authorized, response = _require_gallery_admin(req)
+    if not authorized:
+        return cast(func.HttpResponse, response)
+
+    try:
+        payload = _read_json_body(req)
+    except RequestValidationError as exc:
+        return _json_error(str(exc), exc.status_code, exc.code)
+
+    category = str(payload.get("category", "")).strip().lower()
+    name = str(payload.get("name", "")).strip()
+    if category not in {"processed", "segmented"}:
+        return _json_error(
+            "Unsupported category. Use processed or segmented.",
+            400,
+            "invalid_category",
+        )
+    if not name:
+        return _json_error("name is required.", 400, "missing_blob_name")
+    if not _is_gallery_image_blob(name):
+        return _json_error(
+            "name must reference an image blob.", 400, "invalid_blob_name"
+        )
+
+    prefix = _gallery_prefix_for_category(category)
+    normalized_prefix = _normalize_prefix(prefix or "")
+    if normalized_prefix and not name.startswith(normalized_prefix):
+        return _json_error(
+            "Blob name does not match category prefix.", 400, "prefix_mismatch"
+        )
+
+    _, container_client = _get_container_client(GALLERY_CONTAINER_NAME)
+    if not container_client:
+        return _json_error("Storage is not configured.", 500, "storage_not_configured")
+    deleted = _delete_blob_if_exists(
+        cast(_GalleryContainerClient, container_client), name
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "admin_gallery_image_deleted",
+        category=category,
+        blob_name=name,
+        deleted=deleted,
+    )
+    return func.HttpResponse(
+        body=json.dumps({"category": category, "name": name, "deleted": deleted}),
+        status_code=200,
+        mimetype="application/json",
+    )
+
+
+@app.function_name(name="AdminGalleryReprocessSource")
+@app.route(
+    route="v1/admin/gallery/actions/reprocess-source",
+    methods=["POST"],
+    auth_level=func.AuthLevel.ANONYMOUS,
+)
+def admin_gallery_reprocess_source(req: func.HttpRequest) -> func.HttpResponse:
+    """Reprocess a raw source image provided by the uploader BFF."""
+    authorized, response = _require_gallery_admin(req)
+    if not authorized:
+        return cast(func.HttpResponse, response)
+
+    try:
+        payload = _read_json_body(req)
+    except RequestValidationError as exc:
+        return _json_error(str(exc), exc.status_code, exc.code)
+    source_name = str(payload.get("sourceBlobName", "")).strip()
+    encoded = str(payload.get("imageBytesBase64", "")).strip()
+    if not source_name:
+        return _json_error(
+            "sourceBlobName is required.", 400, "missing_source_blob_name"
+        )
+    if not encoded:
+        return _json_error("imageBytesBase64 is required.", 400, "missing_image_bytes")
+
+    try:
+        image_bytes = base64.b64decode(encoded, validate=True)
+    except ValueError:
+        return _json_error("imageBytesBase64 is invalid.", 400, "invalid_image_bytes")
+
+    _, processed_container = _get_storage_clients()
+    if not processed_container:
+        return _json_error("Storage is not configured.", 500, "storage_not_configured")
+
+    try:
+        result = _process_blob_bytes(source_name, image_bytes, processed_container)
+    except RequestValidationError as exc:
+        return _json_error(str(exc), exc.status_code, exc.code)
+
+    log_event(
+        logger,
+        logging.INFO,
+        "admin_gallery_source_reprocessed",
+        source_blob_name=source_name,
+        uploaded_count=result.uploaded_count,
+        failed_count=result.failed_count,
+    )
+    return func.HttpResponse(
+        body=json.dumps(
+            {
+                "sourceBlobName": source_name,
+                "uploaded": result.to_payload(),
+            }
+        ),
+        status_code=result.status_code(),
+        mimetype="application/json",
+    )
 
 
 @app.function_name(name="GalleryImages")
@@ -697,23 +1235,14 @@ def ready(req: func.HttpRequest) -> func.HttpResponse:
         components["settings"] = {"ok": True}
 
     if settings is not None:
-        allowed_model_ids = sorted(settings.allowed_model_ids)
-        try:
-            bundle = get_model(None, settings)
-            components["models"] = {
-                "ok": True,
-                "model_id": bundle.model_id,
-                "device": str(bundle.device),
-                "allowed_model_ids": allowed_model_ids,
-                "model_aliases": settings.model_aliases,
-            }
-        except Exception as exc:
-            ready_status = False
-            components["models"] = {
-                "ok": False,
-                "error": str(exc),
-                "allowed_model_ids": allowed_model_ids,
-            }
+        # Report allowed models only. Do NOT load the model here: /api/ready is a
+        # fast liveness/deploy smoke probe, and a synchronous DETR load blocks the
+        # request long enough to time out the probe on a cold instance.
+        components["models"] = {
+            "ok": True,
+            "allowed_model_ids": sorted(settings.allowed_model_ids),
+            "model_aliases": settings.model_aliases,
+        }
     else:
         ready_status = False
         components["models"] = {"ok": False, "errors": ["settings unavailable"]}
@@ -793,7 +1322,7 @@ def analyze_layout(req: func.HttpRequest) -> func.HttpResponse:
         log_event(
             logger,
             logging.WARNING,
-            "layout_model_rejected",
+            "detection_model_rejected",
             correlation_id=correlation_id,
             model=params.model_variant,
         )

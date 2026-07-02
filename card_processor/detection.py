@@ -10,10 +10,12 @@ from .detection_crops import attach_crops
 from .detection_infer import infer_detections
 from .detection_model import get_model
 from .settings import ScannerSettings
-from .detection_post import to_detected_cards
+from .detection_post import suppress_overlapping_cards, to_detected_cards
 from .detection_types import DetectionResult
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_CROP_PADDING_RATIO = 0.02
 
 
 def _normalize_label(label: str) -> str:
@@ -46,6 +48,7 @@ def detect_cards_from_image_bytes(
     iou: float = 0.5,
     extract_crops: bool = True,
     crop_format: str = "png",
+    crop_padding_ratio: float = DEFAULT_CROP_PADDING_RATIO,
     settings: Optional[ScannerSettings] = None,
 ) -> DetectionResult:
     """Detect trading cards in raw image bytes."""
@@ -77,13 +80,19 @@ def detect_cards_from_image_bytes(
 
     class_map = _build_class_map(bundle.model)
     raw_dets = infer_detections(
-        bundle.model, bundle.processor, img, conf=conf, imgsz=imgsz, iou=iou
+        bundle.model, bundle.processor, img, conf=conf, imgsz=imgsz
     )
-    cards = to_detected_cards(raw_dets, width, height, class_map)
+    elements = to_detected_cards(raw_dets, width, height, class_map)
+    elements = suppress_overlapping_cards(elements, iou_threshold=iou)
 
-    if extract_crops and cards:
+    if extract_crops and elements:
         try:
-            attach_crops(cards, img, crop_format=crop_format)
+            attach_crops(
+                elements,
+                img,
+                crop_format=crop_format,
+                padding_ratio=crop_padding_ratio,
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Failed to attach crops")
             errors.append(f"crop_error: {exc}")
@@ -91,7 +100,7 @@ def detect_cards_from_image_bytes(
     return DetectionResult(
         image_width=width,
         image_height=height,
-        elements=cards,
+        elements=elements,
         model_info={
             "model_id": bundle.model_id,
             "model_variant": model_variant,
@@ -100,6 +109,7 @@ def detect_cards_from_image_bytes(
             "imgsz": imgsz,
             "conf": conf,
             "iou": iou,
+            "crop_padding_ratio": crop_padding_ratio,
         },
         errors=errors,
     )
