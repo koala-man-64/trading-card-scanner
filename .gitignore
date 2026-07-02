@@ -7,7 +7,7 @@ venv/
 .env
 .env.*
 !.env.example
-release.zip
+release*.zip
 
 __pycache__/
 *.pyc

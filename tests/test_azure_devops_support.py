@@ -1,10 +1,14 @@
 import json
 import os
 import zipfile
+from pathlib import Path
 
 from scripts.azure_devops.assert_clean_artifacts import inspect_artifacts
 from scripts.azure_devops.smoke_function_app import _endpoint_url
 from scripts.azure_devops.write_release_manifest import build_manifest
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_release_manifest_records_artifact_hash_and_source(
@@ -61,3 +65,18 @@ def test_deploy_artifact_evidence_shape_is_json_serializable(tmp_path) -> None:
 
     assert json.loads(output.read_text(encoding="utf-8")) == payload
     assert "SECRET" not in os.environ
+
+
+def test_deploy_pipeline_configures_blob_created_event_subscription() -> None:
+    deploy_yaml = (PROJECT_ROOT / "azure-pipelines" / "deploy-npe.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "az eventgrid event-subscription create" in deploy_yaml
+    assert "--included-event-types Microsoft.Storage.BlobCreated" in deploy_yaml
+    assert "--subject-begins-with" in deploy_yaml
+    assert "systemKeys.blobs_extension" in deploy_yaml
+    assert (
+        "/runtime/webhooks/blobs?functionName=Host.Functions.ProcessBlob" in deploy_yaml
+    )
+    assert "blob-event-subscription.json" in deploy_yaml

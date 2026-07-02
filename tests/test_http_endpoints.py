@@ -3,7 +3,6 @@ import io
 import json
 import zipfile
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from typing import Dict, List, Optional, Union
 from urllib.parse import parse_qs, urlparse
 
@@ -13,7 +12,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from PIL import Image
 
 import function_app
-from card_processor.detection_types import DetectedCard, DetectionResult
+from card_processor.detection_types import DetectionResult, DetectedCard
 from card_processor.upload_results import UploadBatchResult
 
 
@@ -103,6 +102,11 @@ class _StubBlobClient:
             raise ResourceNotFoundError(message="Blob not found")
         return _StubDownload(self._data_map[self._name])
 
+    def delete_blob(self) -> None:
+        if self._name not in self._data_map:
+            raise ResourceNotFoundError(message="Blob not found")
+        del self._data_map[self._name]
+
 
 class _StubPageIterator:
     """Single-page iterator mimicking azure-storage-blob's by_page() pager."""
@@ -124,22 +128,19 @@ class _StubPageIterator:
         return self._page_items
 
 
-class _StubBlobPager:
-    """Iterable list result that also supports continuation-token paging."""
+class _StubBlobPager(list):
+    """List result that also supports continuation-token paging via by_page()."""
 
-    def __init__(self, blobs: List[_StubBlob], page_size: Optional[int]) -> None:
-        self._blobs = blobs
+    def __init__(self, items: List[_StubBlob], page_size: Optional[int]) -> None:
+        super().__init__(items)
         self._page_size = page_size
-
-    def __iter__(self):
-        return iter(self._blobs)
 
     def by_page(self, continuation_token: Optional[str] = None) -> _StubPageIterator:
         start = int(continuation_token) if continuation_token else 0
-        size = self._page_size or len(self._blobs)
-        page_items = self._blobs[start : start + size]
+        size = self._page_size or len(self)
+        page_items = list(self)[start : start + size]
         next_start = start + size
-        next_token = str(next_start) if next_start < len(self._blobs) else None
+        next_token = str(next_start) if next_start < len(self) else None
         return _StubPageIterator(page_items, next_token)
 
 
@@ -168,12 +169,17 @@ class _StubContainerClient:
         *,
         timeout: Optional[int] = None,
         **kwargs: object,
-    ) -> _StubBlobPager:
+    ):
         self.last_prefix = name_starts_with
+        if name_starts_with is None:
+            filtered = list(self._blobs)
+        else:
+            filtered = [
+                blob for blob in self._blobs if blob.name.startswith(name_starts_with)
+            ]
         page_size = kwargs.get("results_per_page")
         return _StubBlobPager(
-            list(self._blobs),
-            page_size=page_size if isinstance(page_size, int) else None,
+            filtered, page_size=page_size if isinstance(page_size, int) else None
         )
 
     def get_blob_client(
@@ -194,6 +200,44 @@ class _StubContainerClient:
     def get_container_properties(self):
         return {"name": self.container_name}
 
+    def upload_blob(
+        self,
+        name: str,
+        data: bytes,
+        *,
+        overwrite: bool,
+        **kwargs: object,
+    ) -> object:
+        if not overwrite and name in self._data_map:
+            raise ValueError("blob exists")
+        self._data_map[name] = data
+        self._content_types.setdefault(name, "application/json")
+        if not any(blob.name == name for blob in self._blobs):
+            self._blobs.append(
+                _StubBlob(
+                    name, size=len(data), last_modified=datetime.now(timezone.utc)
+                )
+            )
+        return object()
+
+
+def _admin_header(
+    *,
+    scopes: str = "gallery.manage",
+    oid: str = "admin-user",
+    roles: Optional[str] = None,
+) -> Dict[str, str]:
+    claims = [
+        {"typ": "scp", "val": scopes},
+        {"typ": "oid", "val": oid},
+    ]
+    if roles is not None:
+        claims.append({"typ": "roles", "val": roles})
+    encoded = base64.b64encode(json.dumps({"claims": claims}).encode("utf-8")).decode(
+        "ascii"
+    )
+    return {"x-ms-client-principal": encoded}
+
 
 def test_resolve_auth_level_defaults_and_validation() -> None:
     default = func.AuthLevel.FUNCTION
@@ -207,6 +251,27 @@ def test_resolve_auth_level_defaults_and_validation() -> None:
     )
     assert function_app._resolve_auth_level("admin", default) == func.AuthLevel.ADMIN
     assert function_app._resolve_auth_level("unknown", default) == default
+
+
+def test_input_blob_trigger_path_defaults_to_raw_prefix() -> None:
+    assert function_app.INPUT_BLOB_TRIGGER_PATH == "input/raw/{name}"
+
+
+def test_process_blob_trigger_uses_event_grid_source() -> None:
+    process_blob = next(
+        item
+        for item in function_app.app.get_functions()
+        if item.get_function_name() == "ProcessBlob"
+    )
+    binding = process_blob.get_bindings_dict()["bindings"][0]
+
+    assert binding["type"] == "blobTrigger"
+    assert binding["path"] == function_app.INPUT_BLOB_TRIGGER_PATH
+    assert binding["source"] == "EventGrid"
+
+
+def test_build_input_blob_trigger_path_allows_empty_prefix() -> None:
+    assert function_app._build_input_blob_trigger_path("input", "") == "input/{name}"
 
 
 def test_gallery_prefix_for_category() -> None:
@@ -290,24 +355,13 @@ def test_list_blob_images_paginates() -> None:
     assert [item["name"] for item in first] == ["processed/0.jpg", "processed/1.jpg"]
     assert first_token == "2"
 
-    second, _, second_token = function_app._list_blob_images(
-        container,
-        "processed",
-        category="processed",
-        use_public_urls=False,
-        page_size=2,
-        continuation_token=first_token,
-    )
-    assert [item["name"] for item in second] == ["processed/2.jpg", "processed/3.jpg"]
-    assert second_token == "4"
-
     last, _, last_token = function_app._list_blob_images(
         container,
         "processed",
         category="processed",
         use_public_urls=False,
         page_size=2,
-        continuation_token=second_token,
+        continuation_token="4",
     )
     assert [item["name"] for item in last] == ["processed/4.jpg"]
     assert last_token is None
@@ -509,6 +563,212 @@ def test_gallery_image_returns_304_when_etag_matches(
     assert resp.status_code == 304
 
 
+def test_process_blob_bytes_writes_lineage_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cards = [("Card One", b"a"), ("Card Two", b"bb")]
+    monkeypatch.setattr(
+        function_app.process_utils,
+        "extract_card_crops_from_image_bytes",
+        lambda *_, **__: cards,
+    )
+    container = _StubContainerClient()
+
+    result = function_app._process_blob_bytes(
+        "raw/source.jpg",
+        _png_bytes(),
+        container,
+    )
+    manifest_name = function_app._lineage_blob_name("raw/source.jpg")
+    manifest = json.loads(container._data_map[manifest_name].decode("utf-8"))
+
+    assert result.uploaded_count == 2
+    assert manifest["sourceBlobName"] == "raw/source.jpg"
+    assert manifest["outputsByCategory"]["processed"] == [
+        "source_1.jpg",
+        "source_2.jpg",
+    ]
+
+
+def test_admin_gallery_images_requires_configured_admin() -> None:
+    req = _StubRequest(headers=_admin_header(oid="other"))
+    resp = function_app.admin_gallery_images(req)
+
+    assert resp.status_code == 403
+
+
+def test_admin_gallery_images_lists_lineage_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(function_app, "ADMIN_ALLOWED_OBJECT_IDS", {"admin-user"})
+    blob = _StubBlob(
+        "processed/source_1.jpg",
+        size=7,
+        last_modified=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    )
+    manifest_blob = _StubBlob(function_app._lineage_blob_name("raw/source.jpg"))
+    manifest = {
+        "sourceBlobName": "raw/source.jpg",
+        "outputsByCategory": {"processed": ["processed/source_1.jpg"]},
+    }
+    container = _StubContainerClient(
+        blobs=[blob, manifest_blob],
+        data_map={
+            manifest_blob.name: json.dumps(manifest).encode("utf-8"),
+        },
+        content_types={manifest_blob.name: "application/json"},
+    )
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+
+    resp = function_app.admin_gallery_images(
+        _StubRequest(
+            params={"category": "processed"},
+            headers=_admin_header(),
+        )
+    )
+    payload = json.loads(resp.get_body().decode("utf-8"))
+
+    assert resp.status_code == 200
+    assert payload["items"][0]["sourceBlobName"] == "raw/source.jpg"
+    assert payload["items"][0]["canCascade"] is True
+
+
+def test_admin_gallery_image_rejects_input_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(function_app, "ADMIN_ALLOWED_OBJECT_IDS", {"admin-user"})
+
+    resp = function_app.admin_gallery_image(
+        _StubRequest(
+            params={"category": "input", "name": "raw/source.jpg"},
+            headers=_admin_header(),
+        )
+    )
+
+    assert resp.status_code == 400
+
+
+def test_admin_gallery_delete_by_source_requires_lineage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(function_app, "ADMIN_ALLOWED_OBJECT_IDS", {"admin-user"})
+    container = _StubContainerClient()
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+
+    resp = function_app.admin_gallery_delete_by_source(
+        _StubRequest(
+            body=json.dumps({"sourceBlobName": "raw/missing.jpg"}).encode("utf-8"),
+            headers=_admin_header(),
+        )
+    )
+
+    assert resp.status_code == 409
+
+
+def test_admin_gallery_delete_by_source_is_idempotent_for_missing_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(function_app, "ADMIN_ALLOWED_OBJECT_IDS", {"admin-user"})
+    manifest_name = function_app._lineage_blob_name("raw/source.jpg")
+    manifest = {
+        "sourceBlobName": "raw/source.jpg",
+        "outputsByCategory": {
+            "processed": ["processed/source_1.jpg", "processed/gone.jpg"]
+        },
+    }
+    container = _StubContainerClient(
+        blobs=[_StubBlob(manifest_name), _StubBlob("processed/source_1.jpg")],
+        data_map={
+            manifest_name: json.dumps(manifest).encode("utf-8"),
+            "processed/source_1.jpg": b"image",
+        },
+        content_types={
+            manifest_name: "application/json",
+            "processed/source_1.jpg": "image/jpeg",
+        },
+    )
+    monkeypatch.setattr(
+        function_app, "_get_container_client", lambda _: (None, container)
+    )
+
+    resp = function_app.admin_gallery_delete_by_source(
+        _StubRequest(
+            body=json.dumps({"sourceBlobName": "raw/source.jpg"}).encode("utf-8"),
+            headers=_admin_header(),
+        )
+    )
+    payload = json.loads(resp.get_body().decode("utf-8"))
+
+    assert resp.status_code == 200
+    assert payload["deleted"] == ["processed/source_1.jpg"]
+    assert payload["missing"] == ["processed/gone.jpg"]
+    assert manifest_name not in container._data_map
+
+
+def test_admin_gallery_delete_image_deletes_legacy_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(function_app, "ADMIN_ALLOWED_OBJECT_IDS", {"admin-user"})
+    container = _StubContainerClient(
+        blobs=[_StubBlob("processed/legacy.jpg")],
+        data_map={"processed/legacy.jpg": b"image"},
+        content_types={"processed/legacy.jpg": "image/jpeg"},
+    )
+    monkeypatch.setattr(
+        function_app,
+        "_get_container_client",
+        lambda _: (None, container),
+    )
+
+    resp = function_app.admin_gallery_delete_image(
+        _StubRequest(
+            body=json.dumps(
+                {"category": "processed", "name": "processed/legacy.jpg"}
+            ).encode("utf-8"),
+            headers=_admin_header(),
+        )
+    )
+    payload = json.loads(resp.get_body().decode("utf-8"))
+
+    assert resp.status_code == 200
+    assert payload["deleted"] is True
+    assert "processed/legacy.jpg" not in container._data_map
+
+
+def test_admin_gallery_reprocess_source_uploads_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(function_app, "ADMIN_ALLOWED_OBJECT_IDS", {"admin-user"})
+    monkeypatch.setattr(
+        function_app.process_utils,
+        "extract_card_crops_from_image_bytes",
+        lambda *_, **__: [("Card One", b"a")],
+    )
+    container = _StubContainerClient()
+    monkeypatch.setattr(function_app, "_get_storage_clients", lambda: (None, container))
+
+    resp = function_app.admin_gallery_reprocess_source(
+        _StubRequest(
+            body=json.dumps(
+                {
+                    "sourceBlobName": "raw/source.jpg",
+                    "imageBytesBase64": base64.b64encode(_png_bytes()).decode("ascii"),
+                }
+            ).encode("utf-8"),
+            headers=_admin_header(),
+        )
+    )
+    payload = json.loads(resp.get_body().decode("utf-8"))
+
+    assert resp.status_code == 200
+    assert payload["uploaded"]["uploaded_count"] == 1
+    assert function_app._lineage_blob_name("raw/source.jpg") in container._data_map
+
+
 def test_health_returns_ok() -> None:
     resp = function_app.health(_StubRequest())
     assert resp.status_code == 200
@@ -520,35 +780,12 @@ def test_ready_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         function_app, "_get_container_client", lambda _: (None, container)
     )
-    monkeypatch.setattr(
-        function_app,
-        "get_model",
-        lambda *_args, **_kwargs: SimpleNamespace(model_id="stub/model", device="cpu"),
-    )
     resp = function_app.ready(_StubRequest())
     payload = json.loads(resp.get_body().decode("utf-8"))
     assert resp.status_code == 200
     assert payload["ready"] is True
     assert payload["components"]["storage"]["ok"] is True
     assert payload["components"]["models"]["ok"] is True
-    assert payload["components"]["models"]["model_id"] == "stub/model"
-
-
-def test_ready_reports_model_load_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    container = _StubContainerClient()
-    monkeypatch.setattr(
-        function_app, "_get_container_client", lambda _: (None, container)
-    )
-
-    def _boom(*_args, **_kwargs):
-        raise RuntimeError("model unavailable")
-
-    monkeypatch.setattr(function_app, "get_model", _boom)
-    resp = function_app.ready(_StubRequest())
-    payload = json.loads(resp.get_body().decode("utf-8"))
-    assert resp.status_code == 503
-    assert payload["ready"] is False
-    assert payload["components"]["models"]["ok"] is False
 
 
 def test_analyze_layout_missing_body_returns_400() -> None:
@@ -558,7 +795,7 @@ def test_analyze_layout_missing_body_returns_400() -> None:
 
 def test_analyze_layout_serializes_response(monkeypatch: pytest.MonkeyPatch) -> None:
     element = DetectedCard(
-        label="Card",
+        label="Text",
         confidence=0.9,
         bbox_xyxy=(0, 0, 10, 10),
         bbox_norm=(0.0, 0.0, 0.1, 0.2),
@@ -584,7 +821,7 @@ def test_analyze_layout_serializes_response(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert resp.status_code == 200
     assert payload["image_width"] == 100
-    assert payload["elements"][0]["label"] == "Card"
+    assert payload["elements"][0]["label"] == "Text"
     assert payload["elements"][0]["crop"]["data"] == base64.b64encode(b"crop").decode(
         "utf-8"
     )

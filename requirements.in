@@ -6,6 +6,7 @@ azure-identity
 opencv-python
 numpy
 Pillow>=12.2.0
+pillow-heif>=1.4.0
 huggingface-hub>=0.36.2,<1
 torch==2.10.0+cpu
 torchvision==0.25.0+cpu

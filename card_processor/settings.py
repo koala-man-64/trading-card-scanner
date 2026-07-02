@@ -102,7 +102,7 @@ def load_settings() -> ScannerSettings:
             "CARD_SCANNER_MAX_RETURN_BYTES", 50 * 1024 * 1024
         ),
         allowed_image_formats=_parse_csv_set(
-            "CARD_SCANNER_ALLOWED_IMAGE_FORMATS", "jpeg,png,webp"
+            "CARD_SCANNER_ALLOWED_IMAGE_FORMATS", "jpeg,png,webp,heic,heif"
         ),
         allowed_model_ids=_parse_model_ids(
             "CARD_SCANNER_ALLOWED_MODEL_IDS", DEFAULT_MODEL_ID

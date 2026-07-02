@@ -27,6 +27,9 @@ These Azure DevOps resources back the NPE deployment:
 - Service connection type: Azure Resource Manager with workload identity federation
 - Service connection ID: `cc978729-1c49-4400-825b-a9c8a82a216b`
 - Azure RBAC scope: `/subscriptions/eabd0bb1-8f36-4f27-ad86-8b33e02aaeb9/resourceGroups/fa-trading-card-scanner-npe_group`
+- Additional required deployment access: read the storage account
+  `tcsstorageeastus2` in resource group `tcs-rg` and create/update Event Grid
+  event subscriptions on that storage account for the `ProcessBlob` trigger.
 - Variable group: `vg-trading-card-scanner-npe`
 - Required variable: `FUNCTION_APP_RESOURCE_GROUP=fa-trading-card-scanner-npe_group`
 - Optional variable: `FUNCTION_APP_BASE_URL=https://fa-trading-card-scanner-npe-evcpctgjhhcthjgq.eastus2-01.azurewebsites.net`
